@@ -15,7 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
+from backend.risk_model_v2 import (
+    get_risk_band as get_risk_band_v2,
+    run_monte_carlo_forecast_v2,
+    get_model_diagnostics,
+    DEFAULT_START_DATE,
+)
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
 from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
@@ -1249,24 +1254,19 @@ class ApiWiseExecuteRequest(BaseModel):
     source_amount: float
 
 
-_api_wallet_balances = {
-    "INR": 8251800.0,
-    "USD": 20000.0,
-    "EUR": 15000.0,
-    "GBP": 0.0,
-}
+_api_wallet_balances: Dict[str, float] = {}
 
-_api_audit_logs = [
+_api_audit_logs: List[Dict[str, Any]] = [
     {
         "id": "AUD-9912",
         "timestamp": "2026-08-28 16:45:10",
         "action": "CONVERT_AND_HOLD",
-        "transaction_id": "TX-098",
-        "counterparty": "Stripe US Infrastructure",
-        "currency": "USD",
-        "foreign_amount": 14500.0,
-        "inr_amount": 1267445.0,
-        "locked_rate": 87.41,
+        "transaction_id": "txn_010",
+        "counterparty": "Frankfurt Data Center Hardware Batch",
+        "currency": "EUR",
+        "foreign_amount": 28000.0,
+        "inr_amount": 2604000.0,
+        "locked_rate": 93.00,
         "sandbox_transfer_id": "TRX-WISE-SBX-8839102",
         "status": "COMPLETED",
     },
@@ -1274,12 +1274,12 @@ _api_audit_logs = [
         "id": "AUD-9911",
         "timestamp": "2026-08-25 11:20:00",
         "action": "SETTLE_NOW",
-        "transaction_id": "TX-094",
-        "counterparty": "AWS Frankfurt Node",
-        "currency": "EUR",
-        "foreign_amount": 8200.0,
-        "inr_amount": 762600.0,
-        "locked_rate": 93.0,
+        "transaction_id": "txn_013",
+        "counterparty": "London Strategic Advisory Contract",
+        "currency": "GBP",
+        "foreign_amount": 32000.0,
+        "inr_amount": 3526400.0,
+        "locked_rate": 110.20,
         "sandbox_transfer_id": "TRX-WISE-SBX-8711094",
         "status": "COMPLETED",
     },
@@ -1294,79 +1294,65 @@ def api_get_forecast(
     risk_tolerance: str = Query("moderate", description="conservative, moderate, aggressive"),
 ):
     engine = get_engine()
-    starting_balance = engine.starting_balance or 1000000.0
-    danger_threshold = engine.danger_threshold or 450000.0
+    inr_rate = engine.fx_rates.get("INR", 95.39)
+    news_adj = get_cached_news_adjustments()
+
+    # Run real Monte Carlo forecast
+    res = run_monte_carlo_forecast_v2(
+        engine=engine,
+        days=horizon,
+        news_adjustments=news_adj,
+    )
+    raw_forecast = engine.get_forecast(days=horizon)
 
     multiplier = 1.35 if risk_tolerance == "conservative" else 0.75 if risk_tolerance == "aggressive" else 1.0
 
-    stress_shift = 0.0
-    if stress_currency == "USD":
-        stress_shift = (stress_pct / 100.0) * 850000.0
-    elif stress_currency == "EUR":
-        stress_shift = (stress_pct / 100.0) * 450000.0
-    elif stress_currency == "INR_CRASH":
-        stress_shift = -abs(stress_pct / 100.0) * 1200000.0
-
-    from datetime import timedelta
     timeline = []
-    running_det = starting_balance
-    base_d = date(2026, 9, 1)
+    prev_balance = round(engine.starting_balance * inr_rate, 2)
+    for i, (mc_p, det_p) in enumerate(zip(res["forecast"], raw_forecast), start=1):
+        det_inr = round(det_p.balance * inr_rate, 2)
+        exp_inr = round(mc_p["expected"] * inr_rate, 2)
+        worst_raw = mc_p["worst"] * inr_rate
+        best_raw = mc_p["best"] * inr_rate
 
-    for i in range(1, horizon + 1):
-        cur_d = base_d + timedelta(days=i - 1)
-        day_flow = 0.0
-        if i == 14:
-            day_flow -= 1395000.0
-        if i == 30:
-            day_flow -= 1748200.0
-        if i == 34:
-            day_flow -= 936700.0
-        if i == 47:
-            day_flow += (1512000.0 - 1048800.0)
-        if i == 83:
-            day_flow -= 842000.0
-        if i % 7 == 0:
-            day_flow += 380000.0
-        if i % 15 == 0:
-            day_flow -= 220000.0
-
-        running_det += day_flow
-        dispersion = (i ** 0.5) * 18500.0 * multiplier * (1.0 + abs(stress_pct) / 20.0)
-        expected = running_det + (stress_shift * (i / horizon))
-        worst = expected - dispersion * 1.645 - max(0.0, -stress_shift * (i / horizon))
-        best = expected + dispersion * 1.645 + max(0.0, stress_shift * (i / horizon))
+        dispersion = (exp_inr - worst_raw) * multiplier
+        worst_inr = round(exp_inr - dispersion, 2)
+        best_inr = round(exp_inr + (best_raw - exp_inr) * multiplier, 2)
+        net_flow_inr = round(det_inr - prev_balance, 2)
+        prev_balance = det_inr
 
         timeline.append({
-            "date": cur_d.isoformat(),
+            "date": mc_p["date"],
             "day_index": i,
-            "deterministic_balance": round(running_det, 2),
-            "worst_case_5th": round(worst, 2),
-            "expected_50th": round(expected, 2),
-            "best_case_95th": round(best, 2),
-            "net_cash_flow": round(day_flow, 2),
+            "deterministic_balance": det_inr,
+            "worst_case_5th": worst_inr,
+            "expected_50th": exp_inr,
+            "best_case_95th": best_inr,
+            "net_cash_flow": net_flow_inr,
         })
 
     final_expected = timeline[-1]["expected_50th"]
     final_worst = timeline[-1]["worst_case_5th"]
     final_best = timeline[-1]["best_case_95th"]
     min_worst = min(t["worst_case_5th"] for t in timeline)
+    danger_inr = round(engine.danger_threshold * inr_rate, 2)
 
     risk_status = "SAFE"
-    if min_worst < danger_threshold:
+    if min_worst < danger_inr:
         risk_status = "BREACH"
-    elif min_worst < danger_threshold * 1.25:
+    elif min_worst < danger_inr * 1.25:
         risk_status = "CAUTION"
 
     return {
         "horizon_days": horizon,
         "base_currency": "INR",
-        "starting_balance": starting_balance,
-        "danger_threshold": danger_threshold,
+        "starting_balance": round(engine.starting_balance * inr_rate, 2),
+        "danger_threshold": danger_inr,
         "summary": {
             "expected_final_balance": final_expected,
             "worst_case_5th_var": final_worst,
             "best_case_95th": final_best,
-            "value_at_risk_95": max(0.0, final_expected - final_worst),
+            "value_at_risk_95": max(0.0, round(final_expected - final_worst, 2)),
             "risk_status": risk_status,
         },
         "timeline": timeline,
@@ -1375,128 +1361,108 @@ def api_get_forecast(
 
 @app.get("/api/transactions")
 def api_get_transactions():
-    return [
-        {
-            "id": "TX-101",
-            "counterparty": "Apex Cloud Systems (US)",
-            "type": "PAYABLE",
-            "currency": "USD",
-            "foreign_amount": 20000.0,
-            "inr_book_value": 1720000.0,
-            "current_inr_value": 1748200.0,
-            "due_date": "2026-09-28",
-            "days_until_due": 30,
-            "status": "UNFUNDED",
-            "classification": "CONVERT_AND_HOLD",
-            "netting_group": "USD-30D",
+    engine = get_engine()
+    inr_rate = engine.fx_rates.get("INR", 95.39)
+    from backend.state_machine import get_all_recommendations
+    recs = get_all_recommendations()
+    recs_by_tx = {r["transaction_id"]: r for r in recs}
+
+    tx_list = []
+    for tx in engine.transactions:
+        tx_id = tx.id
+        is_payable = tx.direction.value == "payable" if hasattr(tx.direction, "value") else tx.direction == "payable"
+        foreign_amount = abs(float(tx.amount))
+        curr = tx.currency.upper()
+
+        if curr == "USD":
+            usd_equiv = foreign_amount
+        else:
+            curr_rate = engine.fx_rates.get(curr, 1.0)
+            usd_equiv = foreign_amount / curr_rate
+        inr_val = round(usd_equiv * inr_rate, 2)
+
+        days_until_due = max(0, (tx.date - DEFAULT_START_DATE).days)
+
+        rec = recs_by_tx.get(tx_id, {})
+        rec_status = rec.get("status")
+        rec_action = rec.get("action_type")
+        demo_action = getattr(tx, "demo_action", None)
+
+        classification = "UNEXPOSED"
+        if demo_action == "convert_and_hold" or rec_action == "CONVERT_AND_HOLD":
+            classification = "CONVERT_AND_HOLD"
+        elif demo_action == "settle_now" or rec_action == "SETTLE_NOW":
+            classification = "SETTLE_NOW"
+        elif is_payable and curr != "USD":
+            classification = "CONVERT_AND_HOLD"
+        elif not is_payable and curr != "USD":
+            classification = "RE_QUOTE_OR_HEDGE"
+        elif curr == "USD":
+            classification = "UNEXPOSED"
+
+        status = "UNFUNDED"
+        if getattr(tx, "status", "pending") in ("settled", "executed") or rec_status == "EXECUTED":
+            status = "SETTLED"
+        elif getattr(tx, "status", "pending") == "hedged":
+            status = "HEDGED"
+        elif not is_payable:
+            status = "EXPOSED_RECEIVABLE"
+        elif classification == "SETTLE_NOW":
+            status = "FUNDED"
+        else:
+            status = "UNFUNDED"
+
+        vol = engine.fx_config.get("daily_volatility", {}).get(curr, 0.0045)
+        if classification == "CONVERT_AND_HOLD":
+            adverse_var_inr = round(inr_val * vol * 1.645 * (max(1, days_until_due) ** 0.5), 2)
+            carry_cost_inr = round(adverse_var_inr * 0.165, 2)
+            gate_passed = adverse_var_inr > carry_cost_inr
+        else:
+            adverse_var_inr = 0.0
+            carry_cost_inr = 0.0
+            gate_passed = False
+
+        if tx_id == "txn_010":
+            recommended_action = "Convert & Hold"
+            rationale = "Frankfurt data center hardware batch (€28,000). Adverse VaR exceeds carry cost hurdle. Lock live EUR rate via Wise Sandbox."
+        elif tx_id == "txn_013":
+            recommended_action = "Settle Now"
+            rationale = "London strategic advisory contract (£32,000). Settle GBP receivable now to eliminate currency volatility."
+        elif classification == "CONVERT_AND_HOLD":
+            recommended_action = "Convert & Hold"
+            rationale = f"Adverse 95% VaR (₹{adverse_var_inr:,.0f}) exceeds carry cost. Lock live mid-market rate."
+        elif classification == "SETTLE_NOW":
+            recommended_action = "Settle Now"
+            rationale = "Balance funded and idle. Settle immediately to eliminate settlement friction."
+        elif classification == "RE_QUOTE_OR_HEDGE":
+            recommended_action = "Re-Quote / Dynamic Buffer"
+            rationale = f"Foreign {curr} receivable exposed to currency fluctuations. Apply dynamic buffer."
+        else:
+            recommended_action = "Monitor Exposure"
+            rationale = "Operating cash flow aligned with base treasury currency."
+
+        tx_list.append({
+            "id": tx_id,
+            "counterparty": tx.description,
+            "type": "PAYABLE" if is_payable else "RECEIVABLE",
+            "currency": curr,
+            "foreign_amount": foreign_amount,
+            "inr_book_value": inr_val,
+            "current_inr_value": inr_val,
+            "due_date": tx.date.isoformat(),
+            "days_until_due": days_until_due,
+            "status": status,
+            "classification": classification,
+            "netting_group": f"{curr}-{max(1, (days_until_due // 15) * 15)}D",
             "is_netted": False,
-            "adverse_var_inr": 86000.0,
-            "carry_cost_inr": 14200.0,
-            "carry_cost_gate_passed": True,
-            "recommended_action": "Convert & Hold",
-            "rationale": "Adverse 95% VaR (₹86,000) significantly exceeds 30-day carry cost (₹14,200). Lock USD now.",
-        },
-        {
-            "id": "TX-102",
-            "counterparty": "Berlin Dev Studio GmbH",
-            "type": "PAYABLE",
-            "currency": "EUR",
-            "foreign_amount": 15000.0,
-            "inr_book_value": 1395000.0,
-            "current_inr_value": 1395000.0,
-            "due_date": "2026-09-12",
-            "days_until_due": 14,
-            "status": "FUNDED",
-            "classification": "SETTLE_NOW",
-            "netting_group": "EUR-14D",
-            "is_netted": False,
-            "adverse_var_inr": 0.0,
-            "carry_cost_inr": 0.0,
-            "carry_cost_gate_passed": False,
-            "recommended_action": "Settle Now",
-            "rationale": "EUR balance already funded and sitting idle. Settle invoice immediately to eliminate settlement friction.",
-        },
-        {
-            "id": "TX-103",
-            "counterparty": "Nordic Retailers AB",
-            "type": "RECEIVABLE",
-            "currency": "USD",
-            "foreign_amount": 18000.0,
-            "inr_book_value": 1548000.0,
-            "current_inr_value": 1512000.0,
-            "due_date": "2026-10-15",
-            "days_until_due": 47,
-            "status": "EXPOSED_RECEIVABLE",
-            "classification": "RE_QUOTE_OR_HEDGE",
-            "netting_group": "USD-45D",
-            "is_netted": False,
-            "adverse_var_inr": 62000.0,
-            "carry_cost_inr": 0.0,
-            "carry_cost_gate_passed": False,
-            "recommended_action": "Re-Quote / Dynamic Buffer",
-            "rationale": "USD receivable at risk of rupee appreciation. Consider adding a 1.5% FX buffer on next contract renewal.",
-        },
-        {
-            "id": "TX-104",
-            "counterparty": "London Design Syndicate",
-            "type": "PAYABLE",
-            "currency": "GBP",
-            "foreign_amount": 8500.0,
-            "inr_book_value": 935000.0,
-            "current_inr_value": 936700.0,
-            "due_date": "2026-10-02",
-            "days_until_due": 34,
-            "status": "UNFUNDED",
-            "classification": "CONVERT_AND_HOLD",
-            "netting_group": "GBP-30D",
-            "is_netted": False,
-            "adverse_var_inr": 42500.0,
-            "carry_cost_inr": 7800.0,
-            "carry_cost_gate_passed": True,
-            "recommended_action": "Convert & Hold",
-            "rationale": "GBP volatility elevated post Bank of England rates meeting. VaR exceeds hurdle rate.",
-        },
-        {
-            "id": "TX-105",
-            "counterparty": "Kyoto Electronics",
-            "type": "PAYABLE",
-            "currency": "USD",
-            "foreign_amount": 12000.0,
-            "inr_book_value": 1044000.0,
-            "current_inr_value": 1048800.0,
-            "due_date": "2026-10-15",
-            "days_until_due": 47,
-            "status": "UNFUNDED",
-            "classification": "NATURALLY_NETTED",
-            "netting_group": "USD-45D",
-            "is_netted": True,
-            "adverse_var_inr": 18000.0,
-            "carry_cost_inr": 4100.0,
-            "carry_cost_gate_passed": False,
-            "recommended_action": "Hold (Natural Net)",
-            "rationale": "Matched against TX-103 ($18,000 receivable). Net exposure is only $6,000 credit. No forward lock required.",
-        },
-        {
-            "id": "TX-106",
-            "counterparty": "Munich SaaS Logistics",
-            "type": "PAYABLE",
-            "currency": "EUR",
-            "foreign_amount": 9000.0,
-            "inr_book_value": 837000.0,
-            "current_inr_value": 842000.0,
-            "due_date": "2026-11-20",
-            "days_until_due": 83,
-            "status": "UNFUNDED",
-            "classification": "CONVERT_AND_HOLD",
-            "netting_group": "EUR-90D",
-            "is_netted": False,
-            "adverse_var_inr": 54000.0,
-            "carry_cost_inr": 11200.0,
-            "carry_cost_gate_passed": True,
-            "recommended_action": "Convert & Hold",
-            "rationale": "Quarterly server infrastructure invoice. Unhedged tail risk pushes horizon balance near danger floor.",
-        },
-    ]
+            "adverse_var_inr": adverse_var_inr,
+            "carry_cost_inr": carry_cost_inr,
+            "carry_cost_gate_passed": gate_passed,
+            "recommended_action": recommended_action,
+            "rationale": rationale,
+        })
+
+    return tx_list
 
 
 @app.get("/api/market-sentiment")
@@ -1541,8 +1507,15 @@ def api_get_market_sentiment():
 
 @app.post("/api/wise/quote")
 def api_post_wise_quote(req: ApiWiseQuoteRequest):
-    rates = {"USD": 87.41, "EUR": 93.0, "GBP": 110.2}
-    rate = rates.get(req.target_currency.upper(), 87.41)
+    engine = get_engine()
+    inr_rate = engine.fx_rates.get("INR", 95.39)
+    tgt_curr = req.target_currency.upper()
+    if tgt_curr == "USD":
+        rate = round(inr_rate, 2)
+    else:
+        tgt_usd_rate = engine.fx_rates.get(tgt_curr, 1.0)
+        rate = round(inr_rate / tgt_usd_rate, 2)
+
     source_amount = round(req.target_amount * rate, 2)
     fee_inr = round(source_amount * 0.0028, 2)
     bank_fee = round(source_amount * 0.02, 2)
@@ -1553,7 +1526,7 @@ def api_post_wise_quote(req: ApiWiseQuoteRequest):
     return {
         "quote_id": quote_id,
         "source_currency": req.source_currency.upper(),
-        "target_currency": req.target_currency.upper(),
+        "target_currency": tgt_curr,
         "target_amount": req.target_amount,
         "source_amount": source_amount + fee_inr,
         "mid_market_rate": rate,
@@ -1569,20 +1542,42 @@ def api_post_wise_execute(req: ApiWiseExecuteRequest):
     import random
     from datetime import datetime
 
+    engine = get_engine()
+    inr_rate = engine.fx_rates.get("INR", 95.39)
     target_curr = req.target_currency.upper()
-    if target_curr in _api_wallet_balances:
-        _api_wallet_balances[target_curr] += req.target_amount
-    _api_wallet_balances["INR"] = max(0.0, _api_wallet_balances["INR"] - req.source_amount)
+    action_type_mapped = "convert_and_hold" if "CONVERT" in req.action_type.upper() else "settle_now"
+
+    # Execute on the REAL in-memory engine if transaction is in the ledger
+    tx_obj = engine.get_transaction_by_id(req.transaction_id)
+    if tx_obj is not None:
+        try:
+            engine.apply_action(
+                transaction_id=req.transaction_id,
+                action=action_type_mapped,
+                settle_date=DEFAULT_START_DATE,
+            )
+        except Exception as e:
+            logger.warning(f"Could not apply action on transaction {req.transaction_id}: {e}")
+
+    # Sync to SQLite state machine
+    try:
+        from backend.state_machine import sync_action_for_transaction
+        sync_action_for_transaction(req.transaction_id, action_type_mapped)
+    except Exception as e:
+        logger.warning(f"Could not sync wise action to state machine: {e}")
 
     trx_id = f"TRX-WISE-SBX-{random.randint(1000000, 9999999)}"
     now_iso = datetime.utcnow().isoformat() + "Z"
+
+    tx_obj = engine.get_transaction_by_id(req.transaction_id)
+    counterparty = tx_obj.description if tx_obj else f"Wise Multi-Currency ({target_curr})"
 
     _api_audit_logs.insert(0, {
         "id": f"AUD-{random.randint(1000, 9999)}",
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         "action": req.action_type,
         "transaction_id": req.transaction_id,
-        "counterparty": f"Wise Multi-Currency ({target_curr})",
+        "counterparty": counterparty,
         "currency": target_curr,
         "foreign_amount": req.target_amount,
         "inr_amount": req.source_amount,
@@ -1591,12 +1586,9 @@ def api_post_wise_execute(req: ApiWiseExecuteRequest):
         "status": "COMPLETED",
     })
 
-    try:
-        from backend.state_machine import sync_action_for_transaction
-        sync_action_for_transaction(req.transaction_id, req.action_type)
-    except Exception as e:
-        import logging
-        logging.getLogger("main").warning("Failed to sync wise action to state machine: %s", e)
+    _api_wallet_balances[target_curr] = _api_wallet_balances.get(target_curr, 0.0) + req.target_amount
+    _api_wallet_balances["INR"] = max(0.0, _api_wallet_balances.get("INR", 0.0) - req.source_amount)
+    _api_wallet_balances["USD"] = max(0.0, _api_wallet_balances.get("USD", 0.0) - (req.source_amount / inr_rate))
 
     return {
         "success": True,
@@ -1614,6 +1606,13 @@ def api_post_wise_execute(req: ApiWiseExecuteRequest):
 
 @app.get("/api/balances")
 def api_get_balances():
+    engine = get_engine()
+    inr_rate = engine.fx_rates.get("INR", 95.39)
+    if "INR" not in _api_wallet_balances or _api_wallet_balances["INR"] == 0.0:
+        _api_wallet_balances["INR"] = round(float(engine.starting_balance) * inr_rate, 2)
+        _api_wallet_balances["USD"] = float(engine.starting_balance)
+        _api_wallet_balances["EUR"] = 15000.0
+        _api_wallet_balances["GBP"] = 0.0
     return _api_wallet_balances
 
 
