@@ -83,7 +83,7 @@ class TestBackendHealthAndEndpoints(unittest.TestCase):
             "/apply-action",
             json={"transaction_id": "invalid_tx_id", "action": "convert_and_hold"}
         )
-        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.status_code, 404)
 
     def test_09_state_reset(self):
         # Apply an action

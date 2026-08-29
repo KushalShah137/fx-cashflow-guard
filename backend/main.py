@@ -5,8 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -567,12 +567,19 @@ def apply_action(
     simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs (ignored)"),
 ):
     engine = get_engine()
+    tx = engine.get_transaction_by_id(req.transaction_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail=f"Transaction '{req.transaction_id}' not found")
+        
     try:
         engine.apply_action(
             transaction_id=req.transaction_id,
             action=req.action,
             settle_date=DEFAULT_START_DATE,
         )
+        # Sync state machine SQLite DB so GET /actions reflects execution
+        from backend.state_machine import sync_action_for_transaction
+        sync_action_for_transaction(req.transaction_id, req.action)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -582,8 +589,10 @@ def apply_action(
 
 @app.post("/reset")
 def reset_demo():
-    """Reset the engine state back to the original mock dataset."""
+    """Reset both the in-memory engine state and the SQLite database tables back to the original dataset."""
     get_engine(reload=True)
+    from backend.db import init_db
+    init_db(force=True)
     return {"status": "reset_successful"}
 
 
@@ -707,6 +716,62 @@ def get_decisions(
 
 
 # --------------------------------------------------------------------------- #
+# Netting & Economic Impact Endpoints
+# --------------------------------------------------------------------------- #
+@app.get("/netting-opportunities")
+def get_netting_opportunities():
+    """Calculates multilateral same-currency netting opportunities across transactions."""
+    from backend.netting_engine import NettingEngine
+    engine = get_engine()
+    netting_eng = NettingEngine()
+    return netting_eng.calculate_netting(
+        transactions=engine.transactions,
+        fx_rates=engine.fx_rates,
+        anchor_date=DEFAULT_START_DATE,
+    )
+
+
+@app.get("/economic-impact")
+def get_economic_impact():
+    """Calculates economic value preservation and avoided cost of inaction."""
+    from backend.economic_impact_engine import EconomicImpactEngine
+    from backend.netting_engine import NettingEngine
+    engine = get_engine()
+    impact_eng = EconomicImpactEngine()
+    
+    # Calculate impact across all active foreign payables
+    total_avoided_loss = 0.0
+    total_action_cost = 0.0
+    impact_items = []
+    
+    for tx in engine.transactions:
+        if tx.direction.value == "payable" and tx.currency != engine.base_currency:
+            base_amt = engine.convert_to_base(tx.amount, tx.currency)
+            # 30-day default horizon
+            days_to_due = max(1, (tx.date - DEFAULT_START_DATE).days)
+            vol = engine.fx_config.get("daily_volatility", {}).get(tx.currency, 0.005)
+            imp = impact_eng.calculate_impact(
+                amount_base=base_amt,
+                daily_volatility=vol,
+                days_to_due=days_to_due,
+                action="CONVERT_AND_HOLD",
+                priority="HIGH" if base_amt > 15000 else "MEDIUM"
+            )
+            imp["transaction_id"] = tx.id
+            imp["currency"] = tx.currency
+            total_avoided_loss += imp["estimated_avoided_loss"]
+            total_action_cost += imp["action_cost"]
+            impact_items.append(imp)
+
+    return {
+        "total_estimated_avoided_loss": round(total_avoided_loss, 2),
+        "total_action_cost": round(total_action_cost, 2),
+        "total_net_economic_benefit": round(total_avoided_loss - total_action_cost, 2),
+        "itemized_impacts": impact_items,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Action Lifecycle Endpoints
 # --------------------------------------------------------------------------- #
 from typing import List
@@ -748,6 +813,143 @@ def reject_action(action_id: str):
         raise HTTPException(status_code=404, detail=str(e))
     except LifecycleError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
+def execute_action(action_id: str):
+    """
+    Executes an action via the state machine pipeline:
+    Transitions status: APPROVED -> EXECUTING -> EXECUTED, and executes the hedge/settlement
+    on the in-memory engine and SQLite database.
+    """
+    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
+    rec = get_recommendation_by_id(action_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+
+    current_status = rec["status"]
+    # Auto-approve if in RECOMMENDED state
+    if current_status == "RECOMMENDED":
+        transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+
+    try:
+        # 1. Transition to EXECUTING
+        transition_recommendation_status(action_id, "EXECUTING", actor="cfo")
+
+        # 2. Execute on in-memory engine
+        engine = get_engine()
+        engine.apply_action(
+            transaction_id=rec["transaction_id"],
+            action=rec["action_type"],
+            settle_date=DEFAULT_START_DATE,
+        )
+
+        # 3. Transition to EXECUTED
+        updated = transition_recommendation_status(action_id, "EXECUTED", actor="cfo")
+        return updated
+    except Exception as e:
+        try:
+            transition_recommendation_status(action_id, "FAILED", actor="system")
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"Execution failed: {e}")
+
+
+# --------------------------------------------------------------------------- #
+# Demo Script Diagnostic Check
+# --------------------------------------------------------------------------- #
+@app.get("/demo-script-check")
+def demo_script_check():
+    """
+    Pre-demo diagnostic health check:
+    Confirms SQLite DB, FX 2-year history cache, Wise fallback, and initial demo transactions.
+    """
+    from backend.db import DB_PATH, get_db_connection
+    from backend.wise_api import execute_wise_action
+
+    checks: Dict[str, Any] = {}
+    engine = get_engine()
+
+    # 1. Check SQLite DB
+    db_ok = DB_PATH.exists()
+    row_count = 0
+    if db_ok:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM transactions")
+            row_count = cur.fetchone()[0]
+            conn.close()
+            db_ok = row_count >= 18
+        except Exception as e:
+            db_ok = False
+    checks["sqlite_database"] = {
+        "status": "PASS" if db_ok else "FAIL",
+        "path": str(DB_PATH),
+        "transaction_rows": row_count,
+    }
+
+    # 2. Check FX Historical Cache
+    cache_path = DATA_PATH.parent / "fx_historical_cache.json"
+    cache_ok = cache_path.exists()
+    cache_rows = 0
+    currencies_found: List[str] = []
+    if cache_ok:
+        try:
+            with open(cache_path, "r", encoding="utf-8-sig") as f:
+                cdata = json.load(f)
+                cache_rows = len(cdata.get("historical_rates", []))
+                currencies_found = cdata.get("currencies", [])
+                cache_ok = cache_rows >= 500 and len(currencies_found) >= 6
+        except Exception:
+            cache_ok = False
+    checks["fx_historical_cache"] = {
+        "status": "PASS" if cache_ok else "FAIL",
+        "rows": cache_rows,
+        "currencies": currencies_found,
+        "date_range": f"{cdata.get('start_date', '')} to {cdata.get('end_date', '')}" if cache_ok else "N/A",
+    }
+
+    # 3. Check Wise API Resilience
+    wise_ok = True
+    wise_resp: Dict[str, Any] = {}
+    try:
+        wise_resp = execute_wise_action("convert_and_hold", "EUR", 1000.0)
+        wise_ok = bool(wise_resp.get("quote_id") and wise_resp.get("rate"))
+    except Exception as e:
+        wise_ok = False
+        wise_resp = {"error": str(e)}
+    checks["wise_sandbox_resilience"] = {
+        "status": "PASS" if wise_ok else "FAIL",
+        "mode": wise_resp.get("status", "unknown"),
+        "quote_id": wise_resp.get("quote_id"),
+        "indicative_rate": wise_resp.get("rate"),
+    }
+
+    # 4. Check Demo Triggers (txn_010, txn_013, txn_019)
+    t10 = engine.get_transaction_by_id("txn_010")
+    t13 = engine.get_transaction_by_id("txn_013")
+    t19 = engine.get_transaction_by_id("txn_019")
+    triggers_ok = bool(
+        t10 and t10.demo_action == "convert_and_hold" and getattr(t10.status, "value", t10.status) == "pending" and
+        t13 and t13.demo_action == "settle_now" and getattr(t13.status, "value", t13.status) == "pending" and
+        t19 and t19.demo_action == "convert_and_hold" and getattr(t19.status, "value", t19.status) == "pending"
+    )
+    checks["demo_transactions_initial_state"] = {
+        "status": "PASS" if triggers_ok else "FAIL",
+        "txn_010_EUR": {"status": getattr(t10.status, "value", str(t10.status)) if t10 else "missing", "action": t10.demo_action if t10 else None},
+        "txn_013_GBP": {"status": getattr(t13.status, "value", str(t13.status)) if t13 else "missing", "action": t13.demo_action if t13 else None},
+        "txn_019_INR": {"status": getattr(t19.status, "value", str(t19.status)) if t19 else "missing", "action": t19.demo_action if t19 else None},
+    }
+
+    all_pass = all(c.get("status") == "PASS" for c in checks.values())
+
+    return {
+        "all_systems_go": all_pass,
+        "status": "GREEN" if all_pass else "RED",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "checks": checks,
+    }
 
 
 # --------------------------------------------------------------------------- #
