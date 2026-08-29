@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from backend.cash_flow_engine import CashFlowEngine
+from backend.risk_model import run_monte_carlo_forecast
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -39,10 +40,17 @@ def get_transactions():
 
 @app.get("/forecast")
 def get_forecast(
+    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
     days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
+    simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs"),
 ):
     engine = get_engine()
-    return engine.get_summary(days=days)
+    return run_monte_carlo_forecast(
+        engine=engine,
+        days=days,
+        target_currency=currency,
+        n_simulations=simulations,
+    )
 
 
 @app.get("/exposures")
@@ -59,4 +67,4 @@ def get_demo_actions():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
