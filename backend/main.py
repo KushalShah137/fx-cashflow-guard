@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from backend.forecast_engine import calculate_deterministic_forecast
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -42,51 +43,15 @@ def get_forecast(
     currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
     days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
 ):
-    # Stub response matching the approved contract exactly
     data = load_mock_data()
-    danger_threshold = data.get("danger_threshold", 20000.0)
-    starting_balance = data.get("starting_balance", 50000.0)
-
-    return {
-        "currency": currency.upper(),
-        "starting_balance": starting_balance,
-        "danger_threshold": danger_threshold,
-        "has_breach": True,
-        "breach_dates": [
-            "2026-09-15",
-            "2026-09-16",
-        ],
-        "summary": {
-            "min_worst_case": 14250.0,
-            "max_best_case": 89400.0,
-            "final_expected": 62300.0,
-        },
-        "forecast": [
-            {
-                "date": "2026-08-29",
-                "best": 50000.0,
-                "expected": 50000.0,
-                "worst": 50000.0,
-                "net_change": 0.0,
-            },
-            {
-                "date": "2026-08-30",
-                "best": 54200.5,
-                "expected": 53500.0,
-                "worst": 51800.2,
-                "net_change": 3500.0,
-            },
-            {
-                "date": "2026-09-15",
-                "best": 26800.0,
-                "expected": 22100.0,
-                "worst": 18450.0,
-                "net_change": -12000.0,
-            },
-        ],
-    }
+    return calculate_deterministic_forecast(
+        data=data,
+        target_currency=currency,
+        days=days,
+        start_date_str="2026-08-29",
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
