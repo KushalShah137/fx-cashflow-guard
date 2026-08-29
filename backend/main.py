@@ -1,13 +1,17 @@
+import sys
+from pathlib import Path
+
+# Add project root to sys.path so modules resolve cleanly both as a script and via uvicorn
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import json
 from datetime import date
-from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model import run_monte_carlo_forecast
 from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
@@ -141,7 +145,6 @@ def risk_classification(
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
 ):
     engine = get_engine()
-    # 1. Retrieve simulated risk band from V2 engine
     band = get_risk_band_v2(
         engine=engine,
         days=days,
@@ -149,7 +152,6 @@ def risk_classification(
         seed=42,
         cache_path=DATA_PATH.parent / "fx_historical_cache.json"
     )
-    # 2. Run risk classification layer on top
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
     return classification
@@ -200,7 +202,6 @@ def get_decisions(
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
 ):
     engine = get_engine()
-    # 1. Retrieve simulated risk band from V2 engine
     band = get_risk_band_v2(
         engine=engine,
         days=days,
@@ -208,15 +209,12 @@ def get_decisions(
         seed=42,
         cache_path=DATA_PATH.parent / "fx_historical_cache.json"
     )
-    # 2. Run risk classification layer on top
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
     
-    # 3. Feed into Decision Engine
     dec_engine = DecisionEngine()
     decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
     return decisions
-
 
 
 if __name__ == "__main__":
