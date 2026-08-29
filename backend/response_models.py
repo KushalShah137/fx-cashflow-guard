@@ -102,3 +102,52 @@ class RiskClassificationResponse(BaseModel):
     chart_annotations: ChartAnnotations
     decision_context: DecisionContextSchema
     risk_band: List[RiskBandPoint]
+
+
+class ActionRecommendationSchema(BaseModel):
+    transaction_id: str
+    action: str
+    currency: str
+    amount: float
+    direction: str
+    priority: str
+    risk_level: str
+    risk_score: int
+    days_to_due: Optional[int] = None
+    requires_approval: bool
+    reason: str
+    reason_codes: List[str]
+    warnings: List[str]
+    amount_base: float
+    recommended_amount: Optional[float] = None
+    expected_impact: Optional[Dict[str, Any]] = None
+
+
+class DecisionKPI(BaseModel):
+    total_foreign_exposures: int
+    actions_required: int
+    high_priority_actions: int
+    medium_priority_actions: int
+    monitor_only: int
+
+
+class DecisionSummary(BaseModel):
+    risk_level: str
+    risk_score: int
+    liquidity_status: str
+    trajectory: str
+    requires_intervention: bool
+
+
+class DecisionEngineContext(BaseModel):
+    currencies_at_risk: List[str]
+    exposure_direction: Dict[str, str]
+
+
+class DecisionResponse(BaseModel):
+    model_version: str
+    decision_policy_version: str
+    overall: DecisionSummary
+    decision_kpis: DecisionKPI
+    recommendations: List[ActionRecommendationSchema]
+    decision_context: DecisionEngineContext
