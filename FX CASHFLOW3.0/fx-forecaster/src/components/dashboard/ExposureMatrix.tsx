@@ -1,4 +1,4 @@
-import { Transaction } from "@/types"
+import { Transaction, RecommendationLifecycle } from "@/types"
 import { formatINR, formatForeign } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { MetalButton } from "@/components/ui/liquid-glass-button"
@@ -14,11 +14,17 @@ import {
 
 interface ExposureMatrixProps {
   transactions: Transaction[]
+  actions?: RecommendationLifecycle[]
+  onApproveAction?: (actionId: string) => void
+  onRejectAction?: (actionId: string) => void
   onSelectTransactionForAction: (tx: Transaction) => void
 }
 
 export function ExposureMatrix({
   transactions,
+  actions,
+  onApproveAction,
+  onRejectAction,
   onSelectTransactionForAction,
 }: ExposureMatrixProps) {
   return (
@@ -76,14 +82,17 @@ export function ExposureMatrix({
           <tbody className="divide-y divide-[#E4E2D9]">
             {transactions.map((tx) => {
               const isPayable = tx.type === "PAYABLE"
-              const isSettled = tx.status === "SETTLED" || tx.status === "HEDGED"
+              const rec = actions?.find((a) => a.transaction_id === tx.id)
+              const recStatus = rec ? rec.status : null
+              const isSettled = tx.status === "SETTLED" || tx.status === "HEDGED" || recStatus === "EXECUTED"
+              const isRejected = recStatus === "REJECTED"
 
               return (
                 <tr
                   key={tx.id}
                   className={`hover:bg-[#F4F3EE]/80 transition-colors ${
                     isSettled ? "bg-[#F4F3EE]/40 opacity-75" : ""
-                  }`}
+                  } ${isRejected ? "opacity-60 bg-[#F4F3EE]/25" : ""}`}
                 >
                   {/* ID */}
                   <td className="p-3 font-bold text-[#18181B] whitespace-nowrap">
@@ -190,6 +199,23 @@ export function ExposureMatrix({
                           [Offset via Netting Pool]
                         </div>
                       )}
+                      {recStatus && (
+                        <div className="mt-1">
+                          <Badge
+                            variant={
+                              recStatus === "APPROVED"
+                                ? "protected"
+                                : recStatus === "RECOMMENDED"
+                                ? "caution"
+                                : "secondary"
+                            }
+                            shape="subtle"
+                            className="text-[9px] px-1 py-0 uppercase font-bold"
+                          >
+                            STATE: {recStatus}
+                          </Badge>
+                        </div>
+                      )}
                     </div>
                   </td>
 
@@ -198,8 +224,29 @@ export function ExposureMatrix({
                     {isSettled ? (
                       <Badge variant="secondary" shape="subtle">
                         <CheckCircle2 className="w-3 h-3 mr-1 inline text-[#047857]" />
-                        {tx.status}
+                        EXECUTED
                       </Badge>
+                    ) : isRejected ? (
+                      <Badge variant="secondary" shape="subtle" className="text-[#71717A] opacity-70">
+                        REJECTED
+                      </Badge>
+                    ) : recStatus === "RECOMMENDED" ? (
+                      <div className="flex justify-end gap-1.5">
+                        <MetalButton
+                          variant="success"
+                          onClick={() => rec && onApproveAction?.(rec.action_id)}
+                          className="h-8 px-2 text-[10px] uppercase tracking-wider font-bold"
+                        >
+                          APPROVE
+                        </MetalButton>
+                        <MetalButton
+                          variant="default"
+                          onClick={() => rec && onRejectAction?.(rec.action_id)}
+                          className="h-8 px-2 text-[10px] uppercase tracking-wider font-bold text-[#B91C1C]"
+                        >
+                          REJECT
+                        </MetalButton>
+                      </div>
                     ) : (
                       <MetalButton
                         variant={

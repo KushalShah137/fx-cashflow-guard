@@ -9,6 +9,8 @@ import {
   WalletBalances,
   AuditLogEntry,
   TimelinePoint,
+  EconomicImpactResponse,
+  RecommendationLifecycle,
 } from "@/types"
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || ""
@@ -503,5 +505,128 @@ export async function executeWiseTransfer(
     amount_credited_foreign: req.target_amount,
     updated_wallet_balances: { ...fallbackBalances },
     recalculated_var_reduction_inr: 86000.0,
+  }
+}
+
+let fallbackActions: RecommendationLifecycle[] = []
+
+export async function fetchEconomicImpact(): Promise<EconomicImpactResponse> {
+  try {
+    const res = await fetch(`${API_BASE}/api/economic-impact`, { signal: AbortSignal.timeout(3000) })
+    if (res.ok) {
+      return await res.json()
+    }
+  } catch (_e) {}
+  
+  return {
+    total_estimated_avoided_loss: 182500,
+    total_action_cost: 36200,
+    total_net_economic_benefit: 146300,
+    itemized_impacts: []
+  }
+}
+
+export async function fetchActions(): Promise<RecommendationLifecycle[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/actions`, { signal: AbortSignal.timeout(3000) })
+    if (res.ok) {
+      const data = await res.json()
+      if (Array.isArray(data)) {
+        fallbackActions = data
+        return data
+      }
+    }
+  } catch (_e) {}
+
+  if (fallbackActions.length === 0) {
+    fallbackActions = fallbackTransactions.map((tx, idx) => ({
+      action_id: `act-${tx.id}`,
+      transaction_id: tx.id,
+      action_type: tx.classification === "CONVERT_AND_HOLD" ? "CONVERT_AND_HOLD" : tx.classification === "SETTLE_NOW" ? "SETTLE_NOW" : "RE_QUOTE",
+      priority: idx % 2 === 0 ? "HIGH" : "MEDIUM",
+      risk_score: 75,
+      confidence: 80,
+      reason: tx.rationale,
+      risk_before: "HIGH",
+      risk_after_estimate: "LOW",
+      estimated_action_cost: tx.carry_cost_inr,
+      estimated_inaction_cost: tx.adverse_var_inr,
+      status: (tx.status === "SETTLED" || tx.status === "HEDGED") ? "EXECUTED" : "RECOMMENDED",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }))
+  }
+  return [...fallbackActions]
+}
+
+export async function approveAction(actionId: string): Promise<RecommendationLifecycle> {
+  try {
+    const res = await fetch(`${API_BASE}/api/actions/${actionId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    })
+    if (res.ok) {
+      const updated = await res.json()
+      fallbackActions = fallbackActions.map(a => a.action_id === actionId ? updated : a)
+      return updated
+    }
+    const err = await res.json().catch(() => ({ detail: "Approval failed" }))
+    throw new Error(err.detail || "Approval failed")
+  } catch (e) {
+    if (e instanceof Error && e.message !== "Approval failed") {
+      let updated: RecommendationLifecycle | null = null
+      fallbackActions = fallbackActions.map(a => {
+        if (a.action_id === actionId) {
+          if (a.status !== "RECOMMENDED") {
+            throw new Error(`Invalid state transition: Cannot transition from ${a.status} to APPROVED`)
+          }
+          updated = { ...a, status: "APPROVED", updated_at: new Date().toISOString() }
+          return updated
+        }
+        return a
+      })
+      if (!updated) throw new Error("Action not found")
+      return updated
+    }
+    throw e
+  }
+}
+
+export async function rejectAction(actionId: string): Promise<RecommendationLifecycle> {
+  try {
+    const res = await fetch(`${API_BASE}/api/actions/${actionId}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    })
+    if (res.ok) {
+      const updated = await res.json()
+      fallbackActions = fallbackActions.map(a => a.action_id === actionId ? updated : a)
+      return updated
+    }
+    const err = await res.json().catch(() => ({ detail: "Rejection failed" }))
+    throw new Error(err.detail || "Rejection failed")
+  } catch (e) {
+    if (e instanceof Error && e.message !== "Rejection failed") {
+      let updated: RecommendationLifecycle | null = null
+      fallbackActions = fallbackActions.map(a => {
+        if (a.action_id === actionId) {
+          if (a.status !== "RECOMMENDED" && a.status !== "APPROVED") {
+            throw new Error(`Invalid state transition: Cannot transition from ${a.status} to REJECTED`)
+          }
+          updated = { ...a, status: "REJECTED", updated_at: new Date().toISOString() }
+          return updated
+        }
+        return a
+      })
+      if (!updated) throw new Error("Action not found")
+      const targetAction = fallbackActions.find(a => a.action_id === actionId)
+      if (targetAction) {
+        fallbackTransactions = fallbackTransactions.map(tx => 
+          tx.id === targetAction.transaction_id ? { ...tx, status: "HEDGED" as any } : tx
+        )
+      }
+      return updated
+    }
+    throw e
   }
 }

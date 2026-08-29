@@ -2,11 +2,11 @@ import sys
 from pathlib import Path
 
 # Add project root to sys.path so modules resolve cleanly both as a script and via uvicorn
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import json
 from datetime import date
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +16,7 @@ from backend.cash_flow_engine import CashFlowEngine
 from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
-from backend.response_models import RiskClassificationResponse, DecisionResponse
+from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -37,6 +37,66 @@ DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_transactions
 
 # In-memory singleton instance for live interactive demo state
 _engine_instance: Optional[CashFlowEngine] = None
+
+
+def save_and_enrich_recommendations(decisions: dict) -> dict:
+    from backend.state_machine import create_or_update_recommendation
+    enriched_recs = []
+    for r in decisions.get("recommendations", []):
+        impact = r.get("expected_impact", {}) or {}
+        rec_data = {
+            "transaction_id": r["transaction_id"],
+            "action_type": r["action"],
+            "priority": r["priority"],
+            "risk_score": r["risk_score"],
+            "confidence": 80,  # default placeholder until Phase 9
+            "reason": r["reason"],
+            "reason_codes": r.get("reason_codes", []),
+            "warnings": r.get("warnings", []),
+            "amount_base": r["amount_base"],
+            "recommended_amount": r.get("recommended_amount"),
+            "risk_before": r.get("risk_level", "LOW"),
+            "risk_after_estimate": "LOW" if r["action"] in ("CONVERT_AND_HOLD", "SETTLE_NOW", "RE_QUOTE") else r.get("risk_level", "LOW"),
+            "estimated_action_cost": impact.get("action_cost", 0.0),
+            "estimated_inaction_cost": impact.get("expected_inaction_cost", 0.0)
+        }
+        action_id = create_or_update_recommendation(rec_data)
+        r_copy = dict(r)
+        r_copy["action_id"] = action_id
+        enriched_recs.append(r_copy)
+    decisions_copy = dict(decisions)
+    decisions_copy["recommendations"] = enriched_recs
+    return decisions_copy
+
+
+# Initialize SQLite database and seed recommendations
+try:
+    from backend.db import init_db
+    init_db()
+    
+    from backend.state_machine import get_all_recommendations
+    if not get_all_recommendations():
+        import logging
+        logging.getLogger("main").info("Recommendations table empty. Seeding initial recommendations...")
+        # Get engine
+        engine = CashFlowEngine.from_file(DATA_PATH)
+        from backend.risk_classifier import RiskClassifier
+        from backend.decision_engine import DecisionEngine
+        
+        band = get_risk_band_v2(
+            engine=engine,
+            days=90,
+            n_simulations=1000,
+            seed=42,
+        )
+        classifier = RiskClassifier()
+        classification = classifier.classify(engine, band, days=90)
+        dec_engine = DecisionEngine()
+        decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+        save_and_enrich_recommendations(decisions)
+except Exception as e:
+    import logging
+    logging.getLogger("main").warning("Database initialization or recommendation seeding failed: %s", e)
 
 
 def get_engine(reload: bool = False) -> CashFlowEngine:
@@ -1062,6 +1122,13 @@ def api_post_wise_execute(req: ApiWiseExecuteRequest):
         "status": "COMPLETED",
     })
 
+    try:
+        from backend.state_machine import sync_action_for_transaction
+        sync_action_for_transaction(req.transaction_id, req.action_type)
+    except Exception as e:
+        import logging
+        logging.getLogger("main").warning("Failed to sync wise action to state machine: %s", e)
+
     return {
         "success": True,
         "sandbox_transfer_id": trx_id,
@@ -1084,6 +1151,112 @@ def api_get_balances():
 @app.get("/api/audit-log")
 def api_get_audit_log():
     return _api_audit_logs
+
+
+# --------------------------------------------------------------------------- #
+# Economic Impact & Cost of Inaction Endpoint
+# --------------------------------------------------------------------------- #
+@app.get("/api/economic-impact")
+def api_get_economic_impact():
+    """Calculates economic value preservation and avoided cost of inaction."""
+    from backend.economic_impact_engine import EconomicImpactEngine
+    engine = get_engine()
+    impact_eng = EconomicImpactEngine()
+    
+    total_avoided_loss = 0.0
+    total_action_cost = 0.0
+    impact_items = []
+    
+    for tx in engine.transactions:
+        tx_dir = tx.direction.value if hasattr(tx.direction, "value") else tx.direction
+        if tx_dir == "payable" and tx.currency != engine.base_currency:
+            base_amt = engine.convert_to_base(tx.amount, tx.currency)
+            days_to_due = max(1, (tx.date - DEFAULT_START_DATE).days)
+            vol = engine.fx_config.get("daily_volatility", {}).get(tx.currency, 0.005)
+            imp = impact_eng.calculate_impact(
+                amount_base=base_amt,
+                daily_volatility=vol,
+                days_to_due=days_to_due,
+                action="CONVERT_AND_HOLD",
+                priority="HIGH" if base_amt > 15000 else "MEDIUM"
+            )
+            imp["transaction_id"] = tx.id
+            imp["currency"] = tx.currency
+            total_avoided_loss += imp["estimated_avoided_loss"]
+            total_action_cost += imp["action_cost"]
+            impact_items.append(imp)
+            
+    return {
+        "total_estimated_avoided_loss": round(total_avoided_loss, 2),
+        "total_action_cost": round(total_action_cost, 2),
+        "total_net_economic_benefit": round(total_avoided_loss - total_action_cost, 2),
+        "itemized_impacts": impact_items,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Action Recommendation Lifecycle Endpoints
+# --------------------------------------------------------------------------- #
+@app.get("/api/actions", response_model=List[RecommendationLifecycleSchema])
+def api_list_actions():
+    from backend.state_machine import get_all_recommendations
+    return get_all_recommendations()
+
+
+@app.post("/api/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
+def api_approve_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
+def api_reject_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
+def api_execute_action(action_id: str):
+    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
+    rec = get_recommendation_by_id(action_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+
+    current_status = rec["status"]
+    if current_status == "RECOMMENDED":
+        transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+
+    try:
+        transition_recommendation_status(action_id, "EXECUTING", actor="cfo")
+        
+        # Execute on in-memory engine
+        engine = get_engine()
+        engine.apply_action(
+            transaction_id=rec["transaction_id"],
+            action=rec["action_type"],
+            settle_date=DEFAULT_START_DATE,
+        )
+
+        updated = transition_recommendation_status(action_id, "EXECUTED", actor="cfo")
+        return updated
+    except Exception as e:
+        try:
+            transition_recommendation_status(action_id, "FAILED", actor="system")
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"Execution failed: {e}")
 
 
 if __name__ == "__main__":

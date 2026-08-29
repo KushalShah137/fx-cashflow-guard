@@ -122,3 +122,39 @@ export interface AuditLogEntry {
   sandbox_transfer_id: string
   status: "COMPLETED" | "VERIFIED"
 }
+
+export interface ItemizedImpact {
+  transaction_id: string
+  currency: string
+  expected_inaction_cost: number
+  action_cost: number
+  estimated_avoided_loss: number
+  estimated_net_benefit: number
+  risk_reduction_percent: number
+  downside_pct: number
+  risk_if_no_action: number
+}
+
+export interface EconomicImpactResponse {
+  total_estimated_avoided_loss: number
+  total_action_cost: number
+  total_net_economic_benefit: number
+  itemized_impacts: ItemizedImpact[]
+}
+
+export interface RecommendationLifecycle {
+  action_id: string
+  transaction_id: string
+  action_type: string
+  priority: string
+  risk_score: number
+  confidence: number
+  reason: string
+  risk_before: string
+  risk_after_estimate: string
+  estimated_action_cost: number
+  estimated_inaction_cost: number
+  status: "RECOMMENDED" | "APPROVED" | "EXECUTING" | "EXECUTED" | "REJECTED" | "FAILED" | "EXPIRED"
+  created_at: string
+  updated_at: string
+}

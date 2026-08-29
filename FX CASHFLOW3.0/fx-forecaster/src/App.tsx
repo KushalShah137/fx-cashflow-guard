@@ -6,6 +6,8 @@ import {
   WalletBalances,
   AuditLogEntry,
   WiseExecutionResponse,
+  EconomicImpactResponse,
+  RecommendationLifecycle,
 } from "@/types"
 import {
   fetchForecast,
@@ -13,6 +15,10 @@ import {
   fetchMarketSentiment,
   fetchBalances,
   fetchAuditLogs,
+  fetchEconomicImpact,
+  fetchActions,
+  approveAction,
+  rejectAction,
 } from "@/lib/api"
 import { LandingHero } from "@/components/landing/LandingHero"
 import { TerminalLoginModal } from "@/components/landing/TerminalLoginModal"
@@ -53,6 +59,8 @@ export function App() {
   })
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
   const [isLoadingForecast, setIsLoadingForecast] = useState(false)
+  const [economicImpact, setEconomicImpact] = useState<EconomicImpactResponse | null>(null)
+  const [actions, setActions] = useState<RecommendationLifecycle[]>([])
 
   // Load Data
   const loadForecastData = useCallback(async () => {
@@ -66,21 +74,30 @@ export function App() {
       })
       setForecast(data)
     } finally {
+      // Fetch economic impact alongside forecast
+      try {
+        const impact = await fetchEconomicImpact()
+        setEconomicImpact(impact)
+      } catch (_e) {}
       setIsLoadingForecast(false)
     }
   }, [horizon, stressCurrency, stressPct, riskTolerance])
 
   const loadInitialData = useCallback(async () => {
-    const [txs, sent, balances, logs] = await Promise.all([
+    const [txs, sent, balances, logs, actionList, impact] = await Promise.all([
       fetchTransactions(),
       fetchMarketSentiment(),
       fetchBalances(),
       fetchAuditLogs(),
+      fetchActions(),
+      fetchEconomicImpact(),
     ])
     setTransactions(txs)
     setSentiment(sent)
     setWalletBalances(balances)
     setAuditLogs(logs)
+    setActions(actionList)
+    setEconomicImpact(impact)
   }, [])
 
   useEffect(() => {
@@ -92,6 +109,29 @@ export function App() {
   }, [loadForecastData])
 
   // Handlers
+  const handleApprove = async (actionId: string) => {
+    try {
+      const updated = await approveAction(actionId)
+      setActions(prev => prev.map(a => a.action_id === actionId ? updated : a))
+      loadForecastData()
+    } catch (e: any) {
+      alert(e.message || "Failed to approve action")
+    }
+  }
+
+  const handleReject = async (actionId: string) => {
+    try {
+      const updated = await rejectAction(actionId)
+      setActions(prev => prev.map(a => a.action_id === actionId ? updated : a))
+      const [txs, logs] = await Promise.all([fetchTransactions(), fetchAuditLogs()])
+      setTransactions(txs)
+      setAuditLogs(logs)
+      loadForecastData()
+    } catch (e: any) {
+      alert(e.message || "Failed to reject action")
+    }
+  }
+
   const handleStressChange = (curr: string, pct: number) => {
     setStressCurrency(curr)
     setStressPct(pct)
@@ -110,10 +150,17 @@ export function App() {
   const handleExecutionSuccess = async (res: WiseExecutionResponse) => {
     setExecutionReceipt(res)
     setWalletBalances(res.updated_wallet_balances)
-    // Refresh transactions, logs, and forecast
-    const [txs, logs] = await Promise.all([fetchTransactions(), fetchAuditLogs()])
+    // Refresh transactions, logs, forecast, actions and economic impact
+    const [txs, logs, actionList, impact] = await Promise.all([
+      fetchTransactions(),
+      fetchAuditLogs(),
+      fetchActions(),
+      fetchEconomicImpact(),
+    ])
     setTransactions(txs)
     setAuditLogs(logs)
+    setActions(actionList)
+    setEconomicImpact(impact)
     loadForecastData()
   }
 
@@ -224,6 +271,7 @@ export function App() {
                 onHorizonChange={setHorizon}
                 riskTolerance={riskTolerance}
                 onRiskToleranceChange={setRiskTolerance}
+                economicImpact={economicImpact || undefined}
               />
             </ContainerScroll>
 
@@ -238,6 +286,9 @@ export function App() {
             {/* 3-Way Exposure Classification Matrix Table */}
             <ExposureMatrix
               transactions={transactions}
+              actions={actions}
+              onApproveAction={handleApprove}
+              onRejectAction={handleReject}
               onSelectTransactionForAction={handleOpenWiseAction}
             />
 
@@ -303,8 +354,11 @@ export function App() {
             />
 
             {/* Exposure Table with Direct Actions */}
-            <ExposureMatrix
+             <ExposureMatrix
               transactions={transactions}
+              actions={actions}
+              onApproveAction={handleApprove}
+              onRejectAction={handleReject}
               onSelectTransactionForAction={handleOpenWiseAction}
             />
 

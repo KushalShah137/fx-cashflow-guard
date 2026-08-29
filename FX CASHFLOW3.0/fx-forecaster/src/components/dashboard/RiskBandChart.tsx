@@ -10,7 +10,7 @@ import {
   ReferenceLine,
   CartesianGrid,
 } from "recharts"
-import { ForecastResponse } from "@/types"
+import { ForecastResponse, EconomicImpactResponse } from "@/types"
 import { formatINR } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { ShieldAlert, ArrowUpRight, ArrowDownRight, Activity } from "lucide-react"
@@ -22,6 +22,7 @@ interface RiskBandChartProps {
   onHorizonChange: (h: number) => void
   riskTolerance: string
   onRiskToleranceChange: (r: string) => void
+  economicImpact?: EconomicImpactResponse
 }
 
 export function RiskBandChart({
@@ -31,6 +32,7 @@ export function RiskBandChart({
   onHorizonChange,
   riskTolerance,
   onRiskToleranceChange,
+  economicImpact,
 }: RiskBandChartProps) {
   const chartData = useMemo(() => {
     if (!forecast || !forecast.timeline) return []
@@ -172,6 +174,41 @@ export function RiskBandChart({
           </div>
         </div>
       </div>
+
+      {/* Cost of Inaction Card */}
+      {economicImpact && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 font-mono mt-3 mb-3">
+          <div className="bg-[#FAF9F5] border border-[#E4E2D9] p-3">
+            <div className="text-[11px] text-[#71717A] uppercase">Expected Loss from Inaction</div>
+            <div className="text-xl font-bold text-[#B91C1C] mt-0.5">
+              {formatINR(economicImpact.total_estimated_avoided_loss)}
+            </div>
+            <div className="text-[10px] text-[#B91C1C] flex items-center gap-1 mt-1">
+              <ArrowDownRight className="w-3 h-3" /> Unhedged Downside Risk
+            </div>
+          </div>
+
+          <div className="bg-[#FAF9F5] border border-[#E4E2D9] p-3">
+            <div className="text-[11px] text-[#71717A] uppercase">Wise Hedging Cost</div>
+            <div className="text-xl font-bold text-[#B45309] mt-0.5">
+              {formatINR(economicImpact.total_action_cost)}
+            </div>
+            <div className="text-[10px] text-[#71717A] flex items-center gap-1 mt-1">
+              <Activity className="w-3 h-3 text-[#B45309]" /> Conversion Fees + Slippage
+            </div>
+          </div>
+
+          <div className="bg-[#FAF9F5] border border-[#18181B] p-3 bg-[#ECFDF5] border-l-4 border-l-[#059669]">
+            <div className="text-[11px] text-[#065F46] font-bold uppercase">Net Benefit of Action</div>
+            <div className="text-xl font-bold text-[#047857] mt-0.5">
+              {formatINR(economicImpact.total_net_economic_benefit)}
+            </div>
+            <div className="text-[10px] text-[#047857] flex items-center gap-1 mt-1">
+              <ArrowUpRight className="w-3 h-3" /> Preserved Enterprise Value
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chart Canvas */}
       <div className="w-full h-[360px] bg-[#FAF9F5] border border-[#E4E2D9] p-2 relative">
