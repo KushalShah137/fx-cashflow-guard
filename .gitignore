@@ -46,5 +46,3 @@ logs/
 .cache/
 coverage/
 *.tmp
-*.db
-data/*.db

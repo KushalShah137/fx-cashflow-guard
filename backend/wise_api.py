@@ -1,15 +1,4 @@
-"""
-================================================================================
-WISE PLATFORM SANDBOX API CLIENT & RESILIENT FALLBACK ENGINE
---------------------------------------------------------------------------------
-Communicates with the Wise Sandbox (https://api.wise-sandbox.com) to generate
-live currency conversion quotes and execute hedging actions. Includes resilient
-fallbacks on 401 unauthorized, timeout, network error, and malformed responses.
-================================================================================
-"""
-
 import os
-import uuid
 import logging
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -32,56 +21,11 @@ logger.setLevel(logging.INFO)
 
 WISE_SANDBOX_BASE_URL = os.getenv("WISE_BASE_URL", "https://api.wise-sandbox.com")
 
-# Fallback indicative market rates for simulation
-FALLBACK_INDICATIVE_RATES = {
-    "EUR": 1.1582,
-    "GBP": 1.3534,
-    "INR": 0.0105,
-    "CNY": 0.1488,
-    "JPY": 0.00626,
-    "AUD": 0.7195,
-    "USD": 1.0,
-}
-
-
-def _make_resilient_quote(
-    source_currency: str,
-    target_currency: str,
-    source_amount: float,
-    status_label: str = "sandbox_simulated",
-    note: str = "",
-    quote_id: Optional[str] = None,
-    rate: Optional[float] = None,
-    fee: Optional[float] = None,
-    raw_payload: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Generates a standardized quote dictionary shape guaranteed to be resilient."""
-    src = source_currency.upper().strip()
-    tgt = target_currency.upper().strip()
-    amt = abs(float(source_amount))
-
-    calc_rate = rate or FALLBACK_INDICATIVE_RATES.get(src, 1.0)
-    calc_fee = fee if fee is not None else round(amt * 0.0042, 2)
-    qid = quote_id or f"quote_sb_{uuid.uuid4().hex[:12]}"
-
-    return {
-        "status": status_label,
-        "quote_id": qid,
-        "rate": float(calc_rate),
-        "fee": float(calc_fee),
-        "sourceCurrency": src,
-        "targetCurrency": tgt,
-        "sourceAmount": amt,
-        "targetAmount": round((amt - calc_fee) * calc_rate, 2),
-        "note": note or "Wise Sandbox quote processed successfully.",
-        "raw": raw_payload or {},
-    }
-
 
 class WiseSandboxClient:
     """
     Client for interacting with Wise Platform Sandbox API.
-    Guarantees resilient response shapes across all failure modes (401, timeout, exceptions).
+    Provides fallback simulation if credentials are unset or if sandbox fails/times out.
     """
 
     def __init__(
@@ -117,7 +61,7 @@ class WiseSandboxClient:
                 res = client.get(url, headers=self.get_headers())
                 if res.status_code == 200:
                     return res.json()
-                logger.warning("Wise get profiles returned status %d", res.status_code)
+                logger.warning("Wise get profiles failed with status %d: %s", res.status_code, res.text)
         except Exception as e:
             logger.warning("Wise get profiles exception: %s", e)
         return None
@@ -130,13 +74,12 @@ class WiseSandboxClient:
     ) -> Dict[str, Any]:
         """
         Creates a Quote in the Wise Sandbox (POST /v3/profiles/{profileId}/quotes).
-        Returns guaranteed standardized quote shape even on 401, timeout, or network failure.
+        Returns the quote object or fallback simulated quote if API call fails.
         """
-        src = source_currency.upper().strip()
-        tgt = target_currency.upper().strip()
-        amt = abs(float(source_amount))
+        source_currency = source_currency.upper().strip()
+        target_currency = target_currency.upper().strip()
 
-        # Auto-discover profile_id if key exists
+        # If profile_id is missing but api_key is present, attempt auto-discovery
         if not self.profile_id and self.api_key:
             profiles = self.fetch_profiles()
             if profiles and isinstance(profiles, list) and len(profiles) > 0:
@@ -144,91 +87,60 @@ class WiseSandboxClient:
                 logger.info("Discovered Wise profile ID: %s", self.profile_id)
 
         if not self.is_configured:
-            logger.info(
-                "Wise credentials unconfigured or running in offline mode. Generating standardized simulated quote."
+            logger.warning(
+                "Wise API credentials not fully configured (WISE_API_KEY or WISE_PROFILE_ID missing). "
+                "Falling back to graceful simulation."
             )
-            return _make_resilient_quote(
-                source_currency=src,
-                target_currency=tgt,
-                source_amount=amt,
-                status_label="simulated",
-                note="Credentials not set — local indicative quote executed cleanly.",
-            )
+            return {
+                "status": "simulated",
+                "sourceCurrency": source_currency,
+                "targetCurrency": target_currency,
+                "sourceAmount": source_amount,
+                "note": "Credentials not configured — local fallback quote executed successfully.",
+            }
 
         url = f"{self.base_url}/v3/profiles/{self.profile_id}/quotes"
         payload = {
-            "sourceCurrency": src,
-            "targetCurrency": tgt,
-            "sourceAmount": amt,
+            "sourceCurrency": source_currency,
+            "targetCurrency": target_currency,
+            "sourceAmount": abs(float(source_amount)),
         }
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(url, headers=self.get_headers(), json=payload)
                 if response.status_code in (200, 201):
-                    try:
-                        data = response.json()
-                        logger.info(
-                            "Wise Sandbox Quote created successfully: id=%s, rate=%s",
-                            data.get("id"),
-                            data.get("rate"),
-                        )
-                        return _make_resilient_quote(
-                            source_currency=src,
-                            target_currency=tgt,
-                            source_amount=amt,
-                            status_label="sandbox_success",
-                            note="Wise Sandbox live API quote generated successfully.",
-                            quote_id=data.get("id"),
-                            rate=float(data.get("rate", 1.0)),
-                            fee=float(data.get("fee", 0.0)),
-                            raw_payload=data,
-                        )
-                    except Exception as json_err:
-                        logger.warning("Wise returned invalid JSON payload: %s", json_err)
-                        return _make_resilient_quote(
-                            source_currency=src,
-                            target_currency=tgt,
-                            source_amount=amt,
-                            status_label="sandbox_fallback_malformed_json",
-                            note="Received malformed JSON from Wise; fallback quote applied.",
-                        )
-                elif response.status_code in (401, 403):
-                    logger.warning("Wise Sandbox authentication failed (%d). Using fallback quote.", response.status_code)
-                    return _make_resilient_quote(
-                        source_currency=src,
-                        target_currency=tgt,
-                        source_amount=amt,
-                        status_label="sandbox_auth_fallback",
-                        note=f"Wise authentication returned {response.status_code}; simulated quote applied.",
+                    data = response.json()
+                    logger.info(
+                        "Wise Sandbox Quote created successfully: id=%s, rate=%s",
+                        data.get("id"),
+                        data.get("rate"),
                     )
+                    return {
+                        "status": "sandbox_success",
+                        "quote_id": data.get("id"),
+                        "rate": data.get("rate"),
+                        "fee": data.get("fee"),
+                        "estimatedDelivery": data.get("estimatedDelivery"),
+                        "raw": data,
+                    }
                 else:
-                    logger.warning("Wise Sandbox returned HTTP %d. Using fallback quote.", response.status_code)
-                    return _make_resilient_quote(
-                        source_currency=src,
-                        target_currency=tgt,
-                        source_amount=amt,
-                        status_label="sandbox_http_fallback",
-                        note=f"Wise returned HTTP {response.status_code}; simulated quote applied.",
+                    logger.warning(
+                        "Wise Sandbox API returned status %d: %s. Falling back to local ledger update.",
+                        response.status_code,
+                        response.text,
                     )
-        except httpx.TimeoutException:
-            logger.warning("Wise Sandbox request timed out after %.1fs. Using fallback quote.", self.timeout)
-            return _make_resilient_quote(
-                source_currency=src,
-                target_currency=tgt,
-                source_amount=amt,
-                status_label="sandbox_timeout_fallback",
-                note=f"Wise connection timed out after {self.timeout}s; simulated quote applied.",
-            )
+                    return {
+                        "status": "sandbox_error_fallback",
+                        "status_code": response.status_code,
+                        "error": response.text,
+                    }
         except Exception as e:
-            logger.warning("Wise Sandbox request failed (%s). Using fallback quote.", e)
-            return _make_resilient_quote(
-                source_currency=src,
-                target_currency=tgt,
-                source_amount=amt,
-                status_label="sandbox_exception_fallback",
-                note=f"Wise connection error ({type(e).__name__}); simulated quote applied.",
-            )
+            logger.warning("Wise Sandbox API request failed (%s). Falling back to local ledger.", e)
+            return {
+                "status": "exception_fallback",
+                "error": str(e),
+            }
 
 
 # Default client instance
