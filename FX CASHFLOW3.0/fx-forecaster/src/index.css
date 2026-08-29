@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --canvas: #F9F8F5;
+    --canvas-subtle: #F4F3EE;
+    --ink-primary: #18181B;
+    --ink-muted: #71717A;
+    --border-hairline: #E4E2D9;
+    --caution-amber: #B45309;
+    --warning-crimson: #B91C1C;
+    --protected-emerald: #047857;
+  }
+
+  body {
+    background-color: var(--canvas);
+    color: var(--ink-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Space Grotesk', sans-serif;
+  }
+
+  .font-mono, code, kbd, samp, pre {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom scrollbars for editorial financial terminal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F4F3EE;
+  border-left: 1px solid #E4E2D9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #DCD9CE;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #71717A;
+}
+
+/* Grid & hairline borders */
+.hairline-border {
+  border-color: #E4E2D9;
+}
+
+.hairline-border-b {
+  border-bottom: 1px solid #E4E2D9;
+}
+
+.hairline-border-r {
+  border-right: 1px solid #E4E2D9;
+}
+
+.hairline-border-t {
+  border-top: 1px solid #E4E2D9;
+}
+
+.hairline-border-l {
+  border-left: 1px solid #E4E2D9;
+}
+
+/* Terminal scanline subtle texture */
+.terminal-grid {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(228, 226, 217, 0.4) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(228, 226, 217, 0.4) 1px, transparent 1px);
+}
