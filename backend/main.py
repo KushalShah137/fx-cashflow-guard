@@ -593,6 +593,8 @@ def reset_demo():
     get_engine(reload=True)
     from backend.db import init_db
     init_db(force=True)
+    from backend.integrations.provider_factory import reset_mock_provider
+    reset_mock_provider()
     return {"status": "reset_successful"}
 
 
@@ -815,44 +817,128 @@ def reject_action(action_id: str):
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@app.post("/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
-def execute_action(action_id: str):
-    """
-    Executes an action via the state machine pipeline:
-    Transitions status: APPROVED -> EXECUTING -> EXECUTED, and executes the hedge/settlement
-    on the in-memory engine and SQLite database.
-    """
-    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
-    rec = get_recommendation_by_id(action_id)
-    if not rec:
-        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+# --------------------------------------------------------------------------- #
+# Execution Engine V2 Endpoints (Quote -> Confirm -> Execute -> Verify -> Reforecast)
+# --------------------------------------------------------------------------- #
+from backend.execution_models import (
+    QuoteResponse,
+    QuoteConfirmationRequest,
+    QuoteConfirmationResponse,
+    ExecutionRequest,
+    ExecutionDetailResponse,
+    ExecutionImpactResponse,
+    AllowedNextActionsResponse,
+)
+from backend.execution_engine_v2 import ExecutionEngineV2, ExecutionEngineError
 
-    current_status = rec["status"]
-    # Auto-approve if in RECOMMENDED state
-    if current_status == "RECOMMENDED":
-        transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+
+@app.post("/actions/{action_id}/quote", response_model=QuoteResponse)
+def request_action_quote(action_id: str):
+    """Generates and stores an unmodifiable quote from the execution provider."""
+    engine = get_engine()
+    exec_engine = ExecutionEngineV2()
+    try:
+        quote = exec_engine.request_quote(action_id=action_id, engine=engine)
+        return quote
+    except ExecutionEngineError as e:
+        raise HTTPException(status_code=e.status_code, detail={"error_code": e.error_code, "message": e.message})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_ERROR", "message": str(e)})
+
+
+@app.get("/actions/{action_id}/quote", response_model=QuoteResponse)
+def get_action_quote(action_id: str):
+    """Retrieves the active quote for an action, validating its expiration status."""
+    exec_engine = ExecutionEngineV2()
+    quote = exec_engine.get_current_quote(action_id=action_id)
+    if not quote:
+        raise HTTPException(status_code=404, detail=f"No quote found for action '{action_id}'")
+    return quote
+
+
+@app.post("/actions/{action_id}/confirm-quote", response_model=QuoteConfirmationResponse)
+def confirm_action_quote(action_id: str, req: QuoteConfirmationRequest):
+    """Confirms acceptance of an active, unexpired quote prior to execution."""
+    exec_engine = ExecutionEngineV2()
+    try:
+        res = exec_engine.confirm_quote(action_id=action_id, quote_id=req.quote_id)
+        return res
+    except ExecutionEngineError as e:
+        raise HTTPException(status_code=e.status_code, detail={"error_code": e.error_code, "message": e.message})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_ERROR", "message": str(e)})
+
+
+@app.post("/actions/{action_id}/execute")
+def execute_action(action_id: str, req: Optional[ExecutionRequest] = None):
+    """
+    Authoritative financial execution:
+    Executes confirmed quote with provider, verifies transaction payload, updates
+    ledger state, runs post-action reforecast & risk reclassification.
+    """
+    engine = get_engine()
+    exec_engine = ExecutionEngineV2()
+    idem_key = req.idempotency_key if req else None
+
+    # If action has no quote yet, auto-request and confirm for seamless one-click execution
+    q = exec_engine.get_current_quote(action_id)
+    if not q or q.is_expired:
+        q = exec_engine.request_quote(action_id, engine)
+        exec_engine.confirm_quote(action_id, q.quote_id)
 
     try:
-        # 1. Transition to EXECUTING
-        transition_recommendation_status(action_id, "EXECUTING", actor="cfo")
-
-        # 2. Execute on in-memory engine
-        engine = get_engine()
-        engine.apply_action(
-            transaction_id=rec["transaction_id"],
-            action=rec["action_type"],
-            settle_date=DEFAULT_START_DATE,
+        exec_res = exec_engine.execute_action(
+            action_id=action_id,
+            engine=engine,
+            idempotency_key=idem_key,
         )
-
-        # 3. Transition to EXECUTED
-        updated = transition_recommendation_status(action_id, "EXECUTED", actor="cfo")
-        return updated
+        return exec_res
+    except ExecutionEngineError as e:
+        raise HTTPException(status_code=e.status_code, detail={"error_code": e.error_code, "message": e.message})
     except Exception as e:
-        try:
-            transition_recommendation_status(action_id, "FAILED", actor="system")
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail=f"Execution failed: {e}")
+        raise HTTPException(status_code=500, detail={"error_code": "INTERNAL_ERROR", "message": str(e)})
+
+
+@app.get("/executions/{execution_id}", response_model=ExecutionDetailResponse)
+def get_execution_details(execution_id: str):
+    """Retrieves full execution details with timeline, quote, verification, and reforecast impact."""
+    engine = get_engine()
+    exec_engine = ExecutionEngineV2()
+    try:
+        return exec_engine.get_execution_details(execution_id=execution_id, engine=engine)
+    except ExecutionEngineError as e:
+        raise HTTPException(status_code=e.status_code, detail={"error_code": e.error_code, "message": e.message})
+
+
+@app.get("/executions/{execution_id}/impact", response_model=ExecutionImpactResponse)
+def get_execution_impact(execution_id: str):
+    """Retrieves before/after risk impact and reforecast metrics for a verified execution."""
+    engine = get_engine()
+    exec_engine = ExecutionEngineV2()
+    try:
+        details = exec_engine.get_execution_details(execution_id=execution_id, engine=engine)
+        if not details.reforecast:
+            raise HTTPException(status_code=404, detail="No reforecast record found for execution.")
+        return details.reforecast
+    except ExecutionEngineError as e:
+        raise HTTPException(status_code=e.status_code, detail={"error_code": e.error_code, "message": e.message})
+
+
+@app.get("/actions/{action_id}/lifecycle", response_model=AllowedNextActionsResponse)
+def get_action_lifecycle(action_id: str):
+    """Returns the current state and allowed next actions for frontend state machine rendering."""
+    from backend.state_machine import get_recommendation_by_id
+    rec = get_recommendation_by_id(action_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"Action '{action_id}' not found.")
+
+    status = rec["status"]
+    allowed = ExecutionEngineV2.get_allowed_next_actions(status)
+    return AllowedNextActionsResponse(
+        action_id=action_id,
+        current_status=status,
+        allowed_next_actions=allowed,
+    )
 
 
 # --------------------------------------------------------------------------- #
