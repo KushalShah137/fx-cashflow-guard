@@ -37,8 +37,80 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
+NEWS_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "news_sentiment_cache.json"
 DEFAULT_START_DATE = date(2026, 9, 1)  # Align with mock transactions date range
 DEFAULT_CURRENCIES: Tuple[str, ...] = ("EUR", "GBP", "INR", "CNY", "JPY", "AUD")
+
+
+def load_news_sentiment_cache(cache_path: Path = NEWS_CACHE_PATH) -> Optional[Dict[str, Any]]:
+    """Loads news sentiment cache if present and valid; returns None on any failure."""
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning("Could not read news sentiment cache (%s). Falling back to baseline.", e)
+        return None
+
+
+def compute_news_parameters(
+    sentiment_data: Optional[Dict[str, Any]],
+    currencies_modeled: List[str],
+    days: int,
+    default_decay_days: int = 5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Translates news sentiment data into time-varying drift (mu) and volatility multiplier (alpha)
+    matrices of shape (days, len(currencies_modeled)).
+
+    When sentiment_data is None or empty:
+      - mu_matrix is all zeros (zero drift)
+      - alpha_matrix is all ones (1.0x baseline volatility)
+    """
+    n_ccy = len(currencies_modeled)
+    mu_matrix = np.zeros((days, n_ccy), dtype=np.float64)
+    alpha_matrix = np.ones((days, n_ccy), dtype=np.float64)
+
+    if not sentiment_data:
+        return mu_matrix, alpha_matrix
+
+    ccy_dict = sentiment_data.get("currencies", sentiment_data)
+
+    for idx, ccy in enumerate(currencies_modeled):
+        if ccy not in ccy_dict:
+            continue
+
+        info = ccy_dict[ccy]
+        effective = info.get("effective", {})
+        raw = info.get("raw", {})
+
+        # Drift in basis points (1 bp = 0.0001) -> converted to daily return drift
+        drift_bps = effective.get(
+            "drift_bias_bps",
+            raw.get("drift_bias_bps", info.get("drift_bias_bps", 0.0)),
+        )
+        daily_drift = float(drift_bps) / 10000.0
+
+        # Volatility multiplier (1.0 = baseline historical vol)
+        vol_mult = effective.get(
+            "volatility_multiplier",
+            raw.get("volatility_multiplier", info.get("volatility_multiplier", 1.0)),
+        )
+        vol_mult = float(vol_mult)
+
+        decay_days = max(1, int(info.get("decay_days", default_decay_days)))
+
+        for t in range(days):
+            if t < decay_days:
+                decay_factor = 1.0 - (t / decay_days)
+                mu_matrix[t, idx] = daily_drift * decay_factor
+                alpha_matrix[t, idx] = 1.0 + (vol_mult - 1.0) * decay_factor
+            else:
+                mu_matrix[t, idx] = 0.0
+                alpha_matrix[t, idx] = 1.0
+
+    return mu_matrix, alpha_matrix
 
 
 # --------------------------------------------------------------------------- #
@@ -199,11 +271,13 @@ def run_monte_carlo_forecast_v2(
     n_simulations: int = 2000,
     base_date: Optional[date] = None,
     seed: Optional[int] = 42,
-    cache_path: Path = CACHE_PATH
+    cache_path: Path = CACHE_PATH,
+    news_sentiment: Optional[Dict[str, Any]] = None,
+    news_cache_path: Optional[Path] = NEWS_CACHE_PATH,
 ) -> Dict[str, Any]:
     """
     Runs correlated Monte Carlo simulation using Cholesky-decomposed historical return cov.
-    Aligns with existing CashFlowEngine interfaces.
+    Aligns with existing CashFlowEngine interfaces, with optional macro news sentiment injection.
     """
     if days < 1:
         raise ValueError(f"forecast horizon must be >= 1 day, got {days}")
@@ -258,7 +332,15 @@ def run_monte_carlo_forecast_v2(
     # Resulting shocks shape: (n_simulations, days, n_currencies)
     shocks = Z @ L.T
 
-    # 3. Ensure rate on day 0 is spot rate (no shock yet)
+    # 3. Inject news sentiment drift (mu) & volatility scaling (alpha)
+    if news_sentiment is None and news_cache_path is not None:
+        news_sentiment = load_news_sentiment_cache(news_cache_path)
+
+    mu_mat, alpha_mat = compute_news_parameters(news_sentiment, currencies_modeled, days)
+    # Apply broadcasted adjustments: (days, n_currencies) -> (n_simulations, days, n_currencies)
+    shocks = mu_mat + (alpha_mat * shocks)
+
+    # 4. Ensure rate on day 0 is spot rate (no shock yet)
     shocks[:, 0, :] = 0.0
 
     # Cumulate simulated log returns over the horizon to get rate paths
@@ -371,7 +453,9 @@ def get_risk_band(
     days: int = 90,
     n_simulations: int = 2000,
     seed: Optional[int] = 42,
-    cache_path: Path = CACHE_PATH
+    cache_path: Path = CACHE_PATH,
+    news_sentiment: Optional[Dict[str, Any]] = None,
+    news_cache_path: Optional[Path] = NEWS_CACHE_PATH,
 ) -> List[Dict[str, Any]]:
     """
     Primary API function returning the risk band in a Recharts-friendly contract:
@@ -382,7 +466,9 @@ def get_risk_band(
         days=days,
         n_simulations=n_simulations,
         seed=seed,
-        cache_path=cache_path
+        cache_path=cache_path,
+        news_sentiment=news_sentiment,
+        news_cache_path=news_cache_path,
     )
     risk_band = []
     for p in res["forecast"]:
