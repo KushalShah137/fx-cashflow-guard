@@ -158,6 +158,64 @@ def init_db(force: bool = False) -> None:
                 );
             """)
 
+            # 8. V2 Quotes Table (Additive)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS quotes_v2 (
+                    quote_id TEXT PRIMARY KEY,
+                    action_id TEXT NOT NULL,
+                    transaction_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    source_currency TEXT NOT NULL,
+                    target_currency TEXT NOT NULL,
+                    source_amount REAL NOT NULL,
+                    target_amount REAL NOT NULL,
+                    rate REAL NOT NULL,
+                    fee REAL NOT NULL,
+                    delivery_estimate TEXT,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    raw_json TEXT
+                );
+            """)
+
+            # 9. V2 Executions Table (Additive)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS executions_v2 (
+                    execution_id TEXT PRIMARY KEY,
+                    action_id TEXT NOT NULL,
+                    transaction_id TEXT NOT NULL,
+                    quote_id TEXT,
+                    idempotency_key TEXT UNIQUE,
+                    provider TEXT NOT NULL,
+                    provider_reference TEXT,
+                    status TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    quoted_at TEXT,
+                    confirmed_at TEXT,
+                    executing_at TEXT,
+                    executed_at TEXT,
+                    verified_at TEXT,
+                    failure_reason TEXT,
+                    verification_json TEXT,
+                    metadata_json TEXT
+                );
+            """)
+
+            # 10. V2 Reforecast Snapshots Table (Additive)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS reforecast_snapshots_v2 (
+                    reforecast_id TEXT PRIMARY KEY,
+                    execution_id TEXT NOT NULL,
+                    action_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    before_json TEXT NOT NULL,
+                    after_json TEXT NOT NULL,
+                    impact_json TEXT NOT NULL
+                );
+            """)
+
         # Seed data
         seed_db(conn)
 
