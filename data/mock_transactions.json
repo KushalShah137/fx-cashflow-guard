@@ -1,0 +1,185 @@
+﻿{
+  "starting_balance": 50000.0,
+  "danger_threshold": 20000.0,
+  "fx_config": {
+    "base_currency": "USD",
+    "rates": {
+      "USD": 1.0,
+      "EUR": 1.08,
+      "GBP": 1.28
+    },
+    "daily_volatility": {
+      "USD": 0.0,
+      "EUR": 0.008,
+      "GBP": 0.009
+    }
+  },
+  "transactions": [
+    {
+      "id": "txn_001",
+      "date": "2026-09-01",
+      "currency": "USD",
+      "amount": -8500.0,
+      "description": "Office Lease & Utilities",
+      "type": "operating_expense",
+      "status": "pending"
+    },
+    {
+      "id": "txn_002",
+      "date": "2026-09-03",
+      "currency": "EUR",
+      "amount": 14000.0,
+      "description": "Enterprise SaaS Client (Berlin)",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_003",
+      "date": "2026-09-07",
+      "currency": "USD",
+      "amount": 18500.0,
+      "description": "US Client Retainer Q3",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_004",
+      "date": "2026-09-12",
+      "currency": "GBP",
+      "amount": -6200.0,
+      "description": "London Marketing Agency Retainer",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_005",
+      "date": "2026-09-15",
+      "currency": "USD",
+      "amount": -22000.0,
+      "description": "Core Engineering Payroll - Mid Month",
+      "type": "payroll",
+      "status": "pending"
+    },
+    {
+      "id": "txn_006",
+      "date": "2026-09-20",
+      "currency": "EUR",
+      "amount": -9500.0,
+      "description": "Munich Cloud Hosting & CDN Annual",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_007",
+      "date": "2026-09-25",
+      "currency": "GBP",
+      "amount": 11500.0,
+      "description": "UK Fintech Consulting Fees",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_008",
+      "date": "2026-09-30",
+      "currency": "USD",
+      "amount": -22000.0,
+      "description": "Core Engineering Payroll - End Month",
+      "type": "payroll",
+      "status": "pending"
+    },
+    {
+      "id": "txn_009",
+      "date": "2026-10-04",
+      "currency": "USD",
+      "amount": 25000.0,
+      "description": "Annual Platform Subscription Renewal",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_010",
+      "date": "2026-10-10",
+      "currency": "EUR",
+      "amount": -28000.0,
+      "description": "Frankfurt Data Center Hardware Batch",
+      "type": "payable",
+      "status": "pending",
+      "demo_action": "convert_and_hold",
+      "demo_action_label": "Convert & Hold EUR"
+    },
+    {
+      "id": "txn_011",
+      "date": "2026-10-15",
+      "currency": "USD",
+      "amount": -22000.0,
+      "description": "Core Engineering Payroll - Mid Month",
+      "type": "payroll",
+      "status": "pending"
+    },
+    {
+      "id": "txn_012",
+      "date": "2026-10-18",
+      "currency": "USD",
+      "amount": 16000.0,
+      "description": "Enterprise Implementation Milestone",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_013",
+      "date": "2026-10-24",
+      "currency": "GBP",
+      "amount": 32000.0,
+      "description": "London Strategic Advisory Contract",
+      "type": "receivable",
+      "status": "pending",
+      "demo_action": "settle_now",
+      "demo_action_label": "Settle GBP Receivable Now"
+    },
+    {
+      "id": "txn_014",
+      "date": "2026-10-31",
+      "currency": "USD",
+      "amount": -22000.0,
+      "description": "Core Engineering Payroll - End Month",
+      "type": "payroll",
+      "status": "pending"
+    },
+    {
+      "id": "txn_015",
+      "date": "2026-11-05",
+      "currency": "EUR",
+      "amount": 12500.0,
+      "description": "Paris Digital Media Licensing",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_016",
+      "date": "2026-11-10",
+      "currency": "GBP",
+      "amount": -14000.0,
+      "description": "UK Regulatory Compliance & Audit Fees",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_017",
+      "date": "2026-11-15",
+      "currency": "USD",
+      "amount": -22000.0,
+      "description": "Core Engineering Payroll - Mid Month",
+      "type": "payroll",
+      "status": "pending"
+    },
+    {
+      "id": "txn_018",
+      "date": "2026-11-22",
+      "currency": "USD",
+      "amount": 35000.0,
+      "description": "Q4 Enterprise License Renewal",
+      "type": "receivable",
+      "status": "pending"
+    }
+  ]
+}
