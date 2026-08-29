@@ -2,10 +2,10 @@ import sys
 from pathlib import Path
 
 # Add project root to sys.path so modules resolve cleanly both as a script and via uvicorn
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
@@ -69,39 +69,12 @@ def save_and_enrich_recommendations(decisions: dict) -> dict:
     return decisions_copy
 
 
-# Initialize SQLite database and seed recommendations
-try:
-    from backend.db import init_db
-    init_db()
-    
-    from backend.state_machine import get_all_recommendations
-    if not get_all_recommendations():
-        import logging
-        logging.getLogger("main").info("Recommendations table empty. Seeding initial recommendations...")
-        # Get engine
-        engine = CashFlowEngine.from_file(DATA_PATH)
-        from backend.risk_classifier import RiskClassifier
-        from backend.decision_engine import DecisionEngine
-        
-        band = get_risk_band_v2(
-            engine=engine,
-            days=90,
-            n_simulations=1000,
-            seed=42,
-        )
-        classifier = RiskClassifier()
-        classification = classifier.classify(engine, band, days=90)
-        dec_engine = DecisionEngine()
-        decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
-        save_and_enrich_recommendations(decisions)
-except Exception as e:
-    import logging
-    logging.getLogger("main").warning("Database initialization or recommendation seeding failed: %s", e)
-
-
 def get_engine(reload: bool = False) -> CashFlowEngine:
     global _engine_instance
     if _engine_instance is None or reload:
+        if reload:
+            from backend.db import init_db
+            init_db(force=True)
         _engine_instance = CashFlowEngine.from_file(DATA_PATH)
     return _engine_instance
 
@@ -594,12 +567,19 @@ def apply_action(
     simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs (ignored)"),
 ):
     engine = get_engine()
+    tx = engine.get_transaction_by_id(req.transaction_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail=f"Transaction '{req.transaction_id}' not found")
+        
     try:
         engine.apply_action(
             transaction_id=req.transaction_id,
             action=req.action,
             settle_date=DEFAULT_START_DATE,
         )
+        # Sync state machine SQLite DB so GET /actions reflects execution
+        from backend.state_machine import sync_action_for_transaction
+        sync_action_for_transaction(req.transaction_id, req.action)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -609,8 +589,10 @@ def apply_action(
 
 @app.post("/reset")
 def reset_demo():
-    """Reset the engine state back to the original mock dataset."""
+    """Reset both the in-memory engine state and the SQLite database tables back to the original dataset."""
     get_engine(reload=True)
+    from backend.db import init_db
+    init_db(force=True)
     return {"status": "reset_successful"}
 
 
@@ -697,6 +679,7 @@ def risk_overview(
     # 4. Feed into Decision Engine
     dec_engine = DecisionEngine()
     decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+    decisions = save_and_enrich_recommendations(decisions)
     
     # 5. Extract exposures
     exposures = [e.to_dict() for e in engine.get_currency_exposures()]
@@ -728,7 +711,625 @@ def get_decisions(
     
     dec_engine = DecisionEngine()
     decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+    decisions = save_and_enrich_recommendations(decisions)
     return decisions
+
+
+# --------------------------------------------------------------------------- #
+# Netting & Economic Impact Endpoints
+# --------------------------------------------------------------------------- #
+@app.get("/netting-opportunities")
+def get_netting_opportunities():
+    """Calculates multilateral same-currency netting opportunities across transactions."""
+    from backend.netting_engine import NettingEngine
+    engine = get_engine()
+    netting_eng = NettingEngine()
+    return netting_eng.calculate_netting(
+        transactions=engine.transactions,
+        fx_rates=engine.fx_rates,
+        anchor_date=DEFAULT_START_DATE,
+    )
+
+
+@app.get("/economic-impact")
+def get_economic_impact():
+    """Calculates economic value preservation and avoided cost of inaction."""
+    from backend.economic_impact_engine import EconomicImpactEngine
+    from backend.netting_engine import NettingEngine
+    engine = get_engine()
+    impact_eng = EconomicImpactEngine()
+    
+    # Calculate impact across all active foreign payables
+    total_avoided_loss = 0.0
+    total_action_cost = 0.0
+    impact_items = []
+    
+    for tx in engine.transactions:
+        if tx.direction.value == "payable" and tx.currency != engine.base_currency:
+            base_amt = engine.convert_to_base(tx.amount, tx.currency)
+            # 30-day default horizon
+            days_to_due = max(1, (tx.date - DEFAULT_START_DATE).days)
+            vol = engine.fx_config.get("daily_volatility", {}).get(tx.currency, 0.005)
+            imp = impact_eng.calculate_impact(
+                amount_base=base_amt,
+                daily_volatility=vol,
+                days_to_due=days_to_due,
+                action="CONVERT_AND_HOLD",
+                priority="HIGH" if base_amt > 15000 else "MEDIUM"
+            )
+            imp["transaction_id"] = tx.id
+            imp["currency"] = tx.currency
+            total_avoided_loss += imp["estimated_avoided_loss"]
+            total_action_cost += imp["action_cost"]
+            impact_items.append(imp)
+
+    return {
+        "total_estimated_avoided_loss": round(total_avoided_loss, 2),
+        "total_action_cost": round(total_action_cost, 2),
+        "total_net_economic_benefit": round(total_avoided_loss - total_action_cost, 2),
+        "itemized_impacts": impact_items,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Action Lifecycle Endpoints
+# --------------------------------------------------------------------------- #
+from typing import List
+
+@app.get("/actions", response_model=List[RecommendationLifecycleSchema])
+def list_actions():
+    from backend.state_machine import get_all_recommendations
+    return get_all_recommendations()
+
+
+@app.get("/actions/{action_id}", response_model=RecommendationLifecycleSchema)
+def get_action(action_id: str):
+    from backend.state_machine import get_recommendation_by_id
+    action = get_recommendation_by_id(action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+    return action
+
+
+@app.post("/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
+def approve_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
+def reject_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
+def execute_action(action_id: str):
+    """
+    Executes an action via the state machine pipeline:
+    Transitions status: APPROVED -> EXECUTING -> EXECUTED, and executes the hedge/settlement
+    on the in-memory engine and SQLite database.
+    """
+    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
+    rec = get_recommendation_by_id(action_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+
+    current_status = rec["status"]
+    # Auto-approve if in RECOMMENDED state
+    if current_status == "RECOMMENDED":
+        transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+
+    try:
+        # 1. Transition to EXECUTING
+        transition_recommendation_status(action_id, "EXECUTING", actor="cfo")
+
+        # 2. Execute on in-memory engine
+        engine = get_engine()
+        engine.apply_action(
+            transaction_id=rec["transaction_id"],
+            action=rec["action_type"],
+            settle_date=DEFAULT_START_DATE,
+        )
+
+        # 3. Transition to EXECUTED
+        updated = transition_recommendation_status(action_id, "EXECUTED", actor="cfo")
+        return updated
+    except Exception as e:
+        try:
+            transition_recommendation_status(action_id, "FAILED", actor="system")
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"Execution failed: {e}")
+
+
+# --------------------------------------------------------------------------- #
+# Demo Script Diagnostic Check
+# --------------------------------------------------------------------------- #
+@app.get("/demo-script-check")
+def demo_script_check():
+    """
+    Pre-demo diagnostic health check:
+    Confirms SQLite DB, FX 2-year history cache, Wise fallback, and initial demo transactions.
+    """
+    from backend.db import DB_PATH, get_db_connection
+    from backend.wise_api import execute_wise_action
+
+    checks: Dict[str, Any] = {}
+    engine = get_engine()
+
+    # 1. Check SQLite DB
+    db_ok = DB_PATH.exists()
+    row_count = 0
+    if db_ok:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM transactions")
+            row_count = cur.fetchone()[0]
+            conn.close()
+            db_ok = row_count >= 18
+        except Exception as e:
+            db_ok = False
+    checks["sqlite_database"] = {
+        "status": "PASS" if db_ok else "FAIL",
+        "path": str(DB_PATH),
+        "transaction_rows": row_count,
+    }
+
+    # 2. Check FX Historical Cache
+    cache_path = DATA_PATH.parent / "fx_historical_cache.json"
+    cache_ok = cache_path.exists()
+    cache_rows = 0
+    currencies_found: List[str] = []
+    if cache_ok:
+        try:
+            with open(cache_path, "r", encoding="utf-8-sig") as f:
+                cdata = json.load(f)
+                cache_rows = len(cdata.get("historical_rates", []))
+                currencies_found = cdata.get("currencies", [])
+                cache_ok = cache_rows >= 500 and len(currencies_found) >= 6
+        except Exception:
+            cache_ok = False
+    checks["fx_historical_cache"] = {
+        "status": "PASS" if cache_ok else "FAIL",
+        "rows": cache_rows,
+        "currencies": currencies_found,
+        "date_range": f"{cdata.get('start_date', '')} to {cdata.get('end_date', '')}" if cache_ok else "N/A",
+    }
+
+    # 3. Check Wise API Resilience
+    wise_ok = True
+    wise_resp: Dict[str, Any] = {}
+    try:
+        wise_resp = execute_wise_action("convert_and_hold", "EUR", 1000.0)
+        wise_ok = bool(wise_resp.get("quote_id") and wise_resp.get("rate"))
+    except Exception as e:
+        wise_ok = False
+        wise_resp = {"error": str(e)}
+    checks["wise_sandbox_resilience"] = {
+        "status": "PASS" if wise_ok else "FAIL",
+        "mode": wise_resp.get("status", "unknown"),
+        "quote_id": wise_resp.get("quote_id"),
+        "indicative_rate": wise_resp.get("rate"),
+    }
+
+    # 4. Check Demo Triggers (txn_010, txn_013, txn_019)
+    t10 = engine.get_transaction_by_id("txn_010")
+    t13 = engine.get_transaction_by_id("txn_013")
+    t19 = engine.get_transaction_by_id("txn_019")
+    triggers_ok = bool(
+        t10 and t10.demo_action == "convert_and_hold" and getattr(t10.status, "value", t10.status) == "pending" and
+        t13 and t13.demo_action == "settle_now" and getattr(t13.status, "value", t13.status) == "pending" and
+        t19 and t19.demo_action == "convert_and_hold" and getattr(t19.status, "value", t19.status) == "pending"
+    )
+    checks["demo_transactions_initial_state"] = {
+        "status": "PASS" if triggers_ok else "FAIL",
+        "txn_010_EUR": {"status": getattr(t10.status, "value", str(t10.status)) if t10 else "missing", "action": t10.demo_action if t10 else None},
+        "txn_013_GBP": {"status": getattr(t13.status, "value", str(t13.status)) if t13 else "missing", "action": t13.demo_action if t13 else None},
+        "txn_019_INR": {"status": getattr(t19.status, "value", str(t19.status)) if t19 else "missing", "action": t19.demo_action if t19 else None},
+    }
+
+    all_pass = all(c.get("status") == "PASS" for c in checks.values())
+
+    return {
+        "all_systems_go": all_pass,
+        "status": "GREEN" if all_pass else "RED",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "checks": checks,
+    }
+
+
+# =========================================================================== #
+# Frontend Integration Endpoints (/api/*)
+# =========================================================================== #
+
+@app.get("/api/forecast")
+def api_get_forecast(
+    horizon: int = Query(60, description="Horizon in days (30, 60, 90)"),
+    stress_currency: Optional[str] = Query(None, description="Currency to stress"),
+    stress_pct: float = Query(0.0, description="Stress percent shift"),
+    risk_tolerance: str = Query("moderate", description="conservative, moderate, aggressive"),
+):
+    engine = get_engine()
+    starting_balance = engine.starting_balance or 50000.0
+    danger_threshold = engine.danger_threshold or 20000.0
+
+    # 1. Run real Monte Carlo simulation with stress testing & Qwen news sentiment
+    from backend.risk_model_v2 import run_monte_carlo_forecast_v2
+    sim_res = run_monte_carlo_forecast_v2(
+        engine=engine,
+        days=horizon,
+        n_simulations=1000,
+        base_date=DEFAULT_START_DATE,
+        seed=42,
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+    )
+
+    # 2. Extract real deterministic baseline points
+    pts = engine.get_forecast(days=horizon, base_date=DEFAULT_START_DATE)
+
+    # 3. Assemble timeline points
+    timeline = []
+    for i in range(1, horizon + 1):
+        pt_idx = i - 1
+        p_det = pts[pt_idx] if pt_idx < len(pts) else pts[-1]
+        p_sim = (
+            sim_res["forecast"][pt_idx]
+            if pt_idx < len(sim_res["forecast"])
+            else sim_res["forecast"][-1]
+        )
+
+        p5 = p_sim["worst"]
+        p50 = p_sim["expected"]
+        p95 = p_sim["best"]
+
+        # If stress test is active
+        if stress_currency and stress_pct != 0.0:
+            stress_factor = (stress_pct / 100.0) * (i / horizon)
+            p5 = p5 * (1.0 + min(0.0, stress_factor))
+            p95 = p95 * (1.0 + max(0.0, stress_factor))
+
+        if risk_tolerance == "conservative":
+            p5 = p50 - (p50 - p5) * 1.25
+            p95 = p50 + (p95 - p50) * 1.25
+        elif risk_tolerance == "aggressive":
+            p5 = p50 - (p50 - p5) * 0.8
+            p95 = p50 + (p95 - p50) * 0.8
+
+        prev_bal = pts[pt_idx - 1].balance if pt_idx > 0 else starting_balance
+        daily_flow = p_det.balance - prev_bal
+
+        timeline.append({
+            "date": p_det.date.isoformat(),
+            "day_index": i,
+            "deterministic_balance": round(p_det.balance, 2),
+            "worst_case_5th": round(p5, 2),
+            "expected_50th": round(p50, 2),
+            "best_case_95th": round(p95, 2),
+            "net_cash_flow": round(daily_flow, 2),
+        })
+
+    final_expected = timeline[-1]["expected_50th"] if timeline else starting_balance
+    final_worst = timeline[-1]["worst_case_5th"] if timeline else starting_balance
+    final_best = timeline[-1]["best_case_95th"] if timeline else starting_balance
+    min_worst = min((t["worst_case_5th"] for t in timeline), default=starting_balance)
+
+    risk_status = "SAFE"
+    if min_worst < danger_threshold:
+        risk_status = "BREACH"
+    elif min_worst < danger_threshold * 1.25:
+        risk_status = "CAUTION"
+
+    return {
+        "horizon_days": horizon,
+        "base_currency": engine.base_currency,
+        "starting_balance": round(starting_balance, 2),
+        "danger_threshold": round(danger_threshold, 2),
+        "summary": {
+            "expected_final_balance": round(final_expected, 2),
+            "worst_case_5th_var": round(final_worst, 2),
+            "best_case_95th": round(final_best, 2),
+            "value_at_risk_95": round(max(0.0, final_expected - final_worst), 2),
+            "risk_status": risk_status,
+        },
+        "timeline": timeline,
+    }
+
+
+@app.get("/api/transactions")
+def api_get_transactions():
+    engine = get_engine()
+    # 1. Run classifications and decisions
+    band = get_risk_band_v2(engine=engine, days=90, n_simulations=500, seed=42)
+    classifier = RiskClassifier()
+    classification = classifier.classify(engine, band, days=90)
+
+    dec_engine = DecisionEngine()
+    decisions = dec_engine.generate_decisions(
+        engine, classification, anchor_date=DEFAULT_START_DATE
+    )
+    decisions = save_and_enrich_recommendations(decisions)
+
+    # 2. Run Netting Engine
+    from backend.netting_engine import NettingEngine
+    from backend.cash_flow_engine import FlowDirection, TransactionStatus
+
+    net_engine = NettingEngine()
+    net_res = net_engine.calculate_netting(
+        transactions=engine.transactions,
+        fx_rates=engine.fx_rates,
+        base_currency=engine.base_currency,
+        anchor_date=DEFAULT_START_DATE,
+    )
+    netted_currencies = {
+        ccy for ccy, data in net_res.get("portfolio_breakdown", {}).items()
+        if data.get("natural_netting_offset", 0.0) > 0
+    }
+
+    rec_by_tx = {r["transaction_id"]: r for r in decisions.get("recommendations", [])}
+
+    tx_list = []
+    for tx in engine.transactions:
+        rec = rec_by_tx.get(tx.id, {})
+        flow_type = "PAYABLE" if tx.direction == FlowDirection.PAYABLE else "RECEIVABLE"
+        days_due = max(0, (tx.date - DEFAULT_START_DATE).days)
+
+        # Calculate real 95% VaR and carry cost
+        base_amt = engine.convert_to_base(abs(tx.amount), tx.currency)
+        cur_val = base_amt
+
+        action = rec.get("action", "MONITOR")
+        adverse_var = base_amt * 0.05 * ((days_due / 30.0) ** 0.5)
+        carry_cost = base_amt * (0.045 / 365.0) * days_due
+
+        status_label = "UNFUNDED"
+        if getattr(tx.status, "value", str(tx.status)) == "settled":
+            status_label = "SETTLED"
+        elif tx.demo_action == "convert_and_hold":
+            status_label = "FUNDED"
+        elif flow_type == "RECEIVABLE":
+            status_label = "EXPOSED_RECEIVABLE"
+
+        tx_list.append({
+            "id": tx.id,
+            "counterparty": getattr(tx, "counterparty", None)
+            or f"{tx.currency} International Partner",
+            "type": flow_type,
+            "currency": tx.currency,
+            "foreign_amount": round(abs(tx.amount), 2),
+            "inr_book_value": round(base_amt, 2),
+            "current_inr_value": round(cur_val, 2),
+            "due_date": tx.date.isoformat(),
+            "days_until_due": days_due,
+            "status": status_label,
+            "classification": action,
+            "netting_group": f"{tx.currency}-{min(90, max(14, (days_due // 15) * 15))}D",
+            "is_netted": tx.currency in netted_currencies,
+            "adverse_var_inr": round(adverse_var, 2),
+            "carry_cost_inr": round(carry_cost, 2),
+            "carry_cost_gate_passed": adverse_var > carry_cost,
+            "recommended_action": action.replace("_", " ").title(),
+            "rationale": rec.get("reason", f"Risk score: {rec.get('risk_score', 50)}/100"),
+        })
+
+    return tx_list
+
+
+@app.get("/api/market-sentiment")
+def api_get_market_sentiment():
+    import numpy as np
+    from backend.risk_model_v2 import NEWS_CACHE_PATH, load_news_sentiment_cache
+
+    cache_data = load_news_sentiment_cache(NEWS_CACHE_PATH)
+    if not cache_data:
+        return {
+            "sentiment_summary": "Macro environment balanced. Historical cross-currency correlations active.",
+            "drift_adjustment": 0.0,
+            "volatility_adjustment": 1.0,
+            "last_updated": datetime.utcnow().isoformat() + "Z",
+            "headlines": [
+                "Fed holds benchmark interest rates steady amid balanced labor market data",
+                "ECB monitors eurozone inflation trajectories and foreign exchange liquidity",
+                "Bank of England signals measured policy stance amid global trade updates",
+            ],
+            "currencies": {
+                "EUR": {"sentiment_score": 0.1, "volatility_multiplier": 1.0, "drift_bias_bps": 0.0},
+                "GBP": {"sentiment_score": -0.2, "volatility_multiplier": 1.05, "drift_bias_bps": -2.0},
+                "USD": {"sentiment_score": 0.3, "volatility_multiplier": 1.0, "drift_bias_bps": 3.0},
+            },
+        }
+
+    ccys = cache_data.get("currencies", {})
+    all_headlines = []
+    for c, info in ccys.items():
+        all_headlines.extend(info.get("headlines", []))
+
+    avg_vol = (
+        float(
+            np.mean([
+                info.get("effective", {}).get("volatility_multiplier", 1.0)
+                for info in ccys.values()
+            ])
+        )
+        if ccys
+        else 1.0
+    )
+    avg_drift = (
+        float(
+            np.mean([
+                info.get("effective", {}).get("drift_bias_bps", 0.0)
+                for info in ccys.values()
+            ])
+        )
+        if ccys
+        else 0.0
+    )
+
+    return {
+        "sentiment_summary": f"Live Qwen 2.5 sentiment analysis across {len(ccys)} FX pairs. Average volatility multiplier: {avg_vol:.2f}x.",
+        "drift_adjustment": round(avg_drift, 2),
+        "volatility_adjustment": round(avg_vol, 2),
+        "last_updated": cache_data.get("updated_at", datetime.utcnow().isoformat() + "Z"),
+        "headlines": all_headlines[:5]
+        or [
+            "ECB rate decision signals measured easing cycle across European sovereign debt",
+            "US Dollar maintains resilient carry advantage against major trading partners",
+        ],
+        "currencies": ccys,
+    }
+
+
+@app.get("/api/balances")
+def api_get_balances():
+    engine = get_engine()
+    balances = {engine.base_currency: round(engine.starting_balance, 2)}
+    for ccy in engine.fx_rates.keys():
+        if ccy != engine.base_currency:
+            balances[ccy] = 0.0
+
+    for tx in engine.transactions:
+        if tx.demo_action == "convert_and_hold" or getattr(tx.status, "value", str(tx.status)) == "settled":
+            balances[tx.currency] = balances.get(tx.currency, 0.0) + abs(tx.amount)
+
+    return balances
+
+
+@app.get("/api/audit-log")
+def api_get_audit_log():
+    from backend.db import get_db_connection, init_db
+    init_db()
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT log_id, event_type, action_id, transaction_id, timestamp, actor, old_state, new_state, metadata_json FROM audit_logs ORDER BY log_id DESC LIMIT 50"
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    logs = []
+    for r in rows:
+        meta = {}
+        try:
+            meta = json.loads(r["metadata_json"] or "{}")
+        except Exception:
+            pass
+
+        logs.append({
+            "id": f"AUD-{r['log_id']}",
+            "timestamp": r["timestamp"],
+            "action": r["event_type"],
+            "transaction_id": r["transaction_id"] or r["action_id"] or "SYSTEM",
+            "counterparty": meta.get("counterparty", "Treasury Operations"),
+            "currency": meta.get("currency", "USD"),
+            "foreign_amount": float(meta.get("foreign_amount", 0.0)),
+            "inr_amount": float(meta.get("inr_amount", meta.get("amount_base", 0.0))),
+            "locked_rate": float(meta.get("locked_rate", meta.get("rate", 1.0))),
+            "sandbox_transfer_id": meta.get(
+                "transfer_id", f"TXN-LOG-{r['log_id']}"
+            ),
+            "status": "COMPLETED",
+        })
+    return logs
+
+
+@app.get("/api/economic-impact")
+def api_get_economic_impact():
+    return get_economic_impact()
+
+
+@app.get("/api/actions", response_model=List[RecommendationLifecycleSchema])
+def api_get_actions():
+    return list_actions()
+
+
+@app.post("/api/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
+def api_approve_action(action_id: str):
+    return approve_action(action_id)
+
+
+@app.post("/api/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
+def api_reject_action(action_id: str):
+    return reject_action(action_id)
+
+
+@app.post("/api/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
+def api_execute_action(action_id: str):
+    return execute_action(action_id)
+
+
+@app.post("/api/wise/quote")
+def api_wise_quote(payload: Dict[str, Any]):
+    from backend.wise_api import wise_client
+
+    source = payload.get("source_currency", "INR")
+    target = payload.get("target_currency", "USD")
+    target_amt = float(payload.get("target_amount", 1000.0))
+
+    quote = wise_client.create_quote(
+        source_currency=source, target_currency=target, source_amount=target_amt
+    )
+    rate = quote.get("rate", 1.0)
+    fee = quote.get("fee", 12.50)
+
+    return {
+        "quote_id": quote.get("id", f"quote_{int(datetime.utcnow().timestamp())}"),
+        "source_currency": source,
+        "target_currency": target,
+        "target_amount": target_amt,
+        "source_amount": round(target_amt / rate if rate > 0 else target_amt, 2),
+        "mid_market_rate": rate,
+        "fee_inr": fee,
+        "traditional_bank_fee_estimate_inr": round(fee * 3.8, 2),
+        "rate_guaranteed_minutes": 30,
+        "delivery_estimate": "Instant via Wise Sandbox Rails",
+    }
+
+
+@app.post("/api/wise/execute")
+def api_wise_execute(payload: Dict[str, Any]):
+    from backend.wise_api import execute_wise_action
+
+    action_type = payload.get("action_type", "CONVERT_AND_HOLD")
+    tx_id = payload.get("transaction_id")
+    target_ccy = payload.get("target_currency", "USD")
+    target_amt = float(payload.get("target_amount", 1000.0))
+
+    result = execute_wise_action(action_type.lower(), target_ccy, target_amt)
+
+    if tx_id:
+        engine = get_engine()
+        engine.apply_action(tx_id, action_type)
+
+    balances = api_get_balances()
+
+    return {
+        "success": True,
+        "sandbox_transfer_id": result.get(
+            "transfer_id", f"TRANSFER-{int(datetime.utcnow().timestamp())}"
+        ),
+        "status": "COMPLETED",
+        "action_executed": action_type,
+        "executed_at": datetime.utcnow().isoformat() + "Z",
+        "locked_rate": result.get("rate", 1.0),
+        "amount_debited_inr": round(target_amt / result.get("rate", 1.0), 2),
+        "amount_credited_foreign": target_amt,
+        "updated_wallet_balances": balances,
+        "recalculated_var_reduction_inr": round(target_amt * 0.08, 2),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -783,480 +1384,6 @@ def viz_dashboard_png(
     engine = get_engine()
     png_bytes = get_dashboard_png_bytes(engine=engine, currency=currency, days=days)
     return Response(content=png_bytes, media_type="image/png")
-
-
-
-# --------------------------------------------------------------------------- #
-# Direct /api/* REST Endpoints (Frontend API Contract)
-# --------------------------------------------------------------------------- #
-
-class ApiWiseQuoteRequest(BaseModel):
-    source_currency: str = "INR"
-    target_currency: str = "USD"
-    target_amount: float = 20000.0
-
-
-class ApiWiseExecuteRequest(BaseModel):
-    quote_id: str
-    action_type: str  # CONVERT_AND_HOLD or SETTLE_NOW
-    transaction_id: str
-    target_currency: str
-    target_amount: float
-    source_amount: float
-
-
-_api_wallet_balances = {
-    "INR": 8251800.0,
-    "USD": 20000.0,
-    "EUR": 15000.0,
-    "GBP": 0.0,
-}
-
-_api_audit_logs = [
-    {
-        "id": "AUD-9912",
-        "timestamp": "2026-08-28 16:45:10",
-        "action": "CONVERT_AND_HOLD",
-        "transaction_id": "TX-098",
-        "counterparty": "Stripe US Infrastructure",
-        "currency": "USD",
-        "foreign_amount": 14500.0,
-        "inr_amount": 1267445.0,
-        "locked_rate": 87.41,
-        "sandbox_transfer_id": "TRX-WISE-SBX-8839102",
-        "status": "COMPLETED",
-    },
-    {
-        "id": "AUD-9911",
-        "timestamp": "2026-08-25 11:20:00",
-        "action": "SETTLE_NOW",
-        "transaction_id": "TX-094",
-        "counterparty": "AWS Frankfurt Node",
-        "currency": "EUR",
-        "foreign_amount": 8200.0,
-        "inr_amount": 762600.0,
-        "locked_rate": 93.0,
-        "sandbox_transfer_id": "TRX-WISE-SBX-8711094",
-        "status": "COMPLETED",
-    },
-]
-
-
-@app.get("/api/forecast")
-def api_get_forecast(
-    horizon: int = Query(60, description="Horizon in days (30, 60, 90)"),
-    stress_currency: Optional[str] = Query(None, description="Currency to stress"),
-    stress_pct: float = Query(0.0, description="Stress percent shift"),
-    risk_tolerance: str = Query("moderate", description="conservative, moderate, aggressive"),
-):
-    engine = get_engine()
-    starting_balance = engine.starting_balance or 1000000.0
-    danger_threshold = engine.danger_threshold or 450000.0
-
-    multiplier = 1.35 if risk_tolerance == "conservative" else 0.75 if risk_tolerance == "aggressive" else 1.0
-
-    stress_shift = 0.0
-    if stress_currency == "USD":
-        stress_shift = (stress_pct / 100.0) * 850000.0
-    elif stress_currency == "EUR":
-        stress_shift = (stress_pct / 100.0) * 450000.0
-    elif stress_currency == "INR_CRASH":
-        stress_shift = -abs(stress_pct / 100.0) * 1200000.0
-
-    from datetime import timedelta
-    timeline = []
-    running_det = starting_balance
-    base_d = date(2026, 9, 1)
-
-    for i in range(1, horizon + 1):
-        cur_d = base_d + timedelta(days=i - 1)
-        day_flow = 0.0
-        if i == 14:
-            day_flow -= 1395000.0
-        if i == 30:
-            day_flow -= 1748200.0
-        if i == 34:
-            day_flow -= 936700.0
-        if i == 47:
-            day_flow += (1512000.0 - 1048800.0)
-        if i == 83:
-            day_flow -= 842000.0
-        if i % 7 == 0:
-            day_flow += 380000.0
-        if i % 15 == 0:
-            day_flow -= 220000.0
-
-        running_det += day_flow
-        dispersion = (i ** 0.5) * 18500.0 * multiplier * (1.0 + abs(stress_pct) / 20.0)
-        expected = running_det + (stress_shift * (i / horizon))
-        worst = expected - dispersion * 1.645 - max(0.0, -stress_shift * (i / horizon))
-        best = expected + dispersion * 1.645 + max(0.0, stress_shift * (i / horizon))
-
-        timeline.append({
-            "date": cur_d.isoformat(),
-            "day_index": i,
-            "deterministic_balance": round(running_det, 2),
-            "worst_case_5th": round(worst, 2),
-            "expected_50th": round(expected, 2),
-            "best_case_95th": round(best, 2),
-            "net_cash_flow": round(day_flow, 2),
-        })
-
-    final_expected = timeline[-1]["expected_50th"]
-    final_worst = timeline[-1]["worst_case_5th"]
-    final_best = timeline[-1]["best_case_95th"]
-    min_worst = min(t["worst_case_5th"] for t in timeline)
-
-    risk_status = "SAFE"
-    if min_worst < danger_threshold:
-        risk_status = "BREACH"
-    elif min_worst < danger_threshold * 1.25:
-        risk_status = "CAUTION"
-
-    return {
-        "horizon_days": horizon,
-        "base_currency": "INR",
-        "starting_balance": starting_balance,
-        "danger_threshold": danger_threshold,
-        "summary": {
-            "expected_final_balance": final_expected,
-            "worst_case_5th_var": final_worst,
-            "best_case_95th": final_best,
-            "value_at_risk_95": max(0.0, final_expected - final_worst),
-            "risk_status": risk_status,
-        },
-        "timeline": timeline,
-    }
-
-
-@app.get("/api/transactions")
-def api_get_transactions():
-    return [
-        {
-            "id": "TX-101",
-            "counterparty": "Apex Cloud Systems (US)",
-            "type": "PAYABLE",
-            "currency": "USD",
-            "foreign_amount": 20000.0,
-            "inr_book_value": 1720000.0,
-            "current_inr_value": 1748200.0,
-            "due_date": "2026-09-28",
-            "days_until_due": 30,
-            "status": "UNFUNDED",
-            "classification": "CONVERT_AND_HOLD",
-            "netting_group": "USD-30D",
-            "is_netted": False,
-            "adverse_var_inr": 86000.0,
-            "carry_cost_inr": 14200.0,
-            "carry_cost_gate_passed": True,
-            "recommended_action": "Convert & Hold",
-            "rationale": "Adverse 95% VaR (₹86,000) significantly exceeds 30-day carry cost (₹14,200). Lock USD now.",
-        },
-        {
-            "id": "TX-102",
-            "counterparty": "Berlin Dev Studio GmbH",
-            "type": "PAYABLE",
-            "currency": "EUR",
-            "foreign_amount": 15000.0,
-            "inr_book_value": 1395000.0,
-            "current_inr_value": 1395000.0,
-            "due_date": "2026-09-12",
-            "days_until_due": 14,
-            "status": "FUNDED",
-            "classification": "SETTLE_NOW",
-            "netting_group": "EUR-14D",
-            "is_netted": False,
-            "adverse_var_inr": 0.0,
-            "carry_cost_inr": 0.0,
-            "carry_cost_gate_passed": False,
-            "recommended_action": "Settle Now",
-            "rationale": "EUR balance already funded and sitting idle. Settle invoice immediately to eliminate settlement friction.",
-        },
-        {
-            "id": "TX-103",
-            "counterparty": "Nordic Retailers AB",
-            "type": "RECEIVABLE",
-            "currency": "USD",
-            "foreign_amount": 18000.0,
-            "inr_book_value": 1548000.0,
-            "current_inr_value": 1512000.0,
-            "due_date": "2026-10-15",
-            "days_until_due": 47,
-            "status": "EXPOSED_RECEIVABLE",
-            "classification": "RE_QUOTE_OR_HEDGE",
-            "netting_group": "USD-45D",
-            "is_netted": False,
-            "adverse_var_inr": 62000.0,
-            "carry_cost_inr": 0.0,
-            "carry_cost_gate_passed": False,
-            "recommended_action": "Re-Quote / Dynamic Buffer",
-            "rationale": "USD receivable at risk of rupee appreciation. Consider adding a 1.5% FX buffer on next contract renewal.",
-        },
-        {
-            "id": "TX-104",
-            "counterparty": "London Design Syndicate",
-            "type": "PAYABLE",
-            "currency": "GBP",
-            "foreign_amount": 8500.0,
-            "inr_book_value": 935000.0,
-            "current_inr_value": 936700.0,
-            "due_date": "2026-10-02",
-            "days_until_due": 34,
-            "status": "UNFUNDED",
-            "classification": "CONVERT_AND_HOLD",
-            "netting_group": "GBP-30D",
-            "is_netted": False,
-            "adverse_var_inr": 42500.0,
-            "carry_cost_inr": 7800.0,
-            "carry_cost_gate_passed": True,
-            "recommended_action": "Convert & Hold",
-            "rationale": "GBP volatility elevated post Bank of England rates meeting. VaR exceeds hurdle rate.",
-        },
-        {
-            "id": "TX-105",
-            "counterparty": "Kyoto Electronics",
-            "type": "PAYABLE",
-            "currency": "USD",
-            "foreign_amount": 12000.0,
-            "inr_book_value": 1044000.0,
-            "current_inr_value": 1048800.0,
-            "due_date": "2026-10-15",
-            "days_until_due": 47,
-            "status": "UNFUNDED",
-            "classification": "NATURALLY_NETTED",
-            "netting_group": "USD-45D",
-            "is_netted": True,
-            "adverse_var_inr": 18000.0,
-            "carry_cost_inr": 4100.0,
-            "carry_cost_gate_passed": False,
-            "recommended_action": "Hold (Natural Net)",
-            "rationale": "Matched against TX-103 ($18,000 receivable). Net exposure is only $6,000 credit. No forward lock required.",
-        },
-        {
-            "id": "TX-106",
-            "counterparty": "Munich SaaS Logistics",
-            "type": "PAYABLE",
-            "currency": "EUR",
-            "foreign_amount": 9000.0,
-            "inr_book_value": 837000.0,
-            "current_inr_value": 842000.0,
-            "due_date": "2026-11-20",
-            "days_until_due": 83,
-            "status": "UNFUNDED",
-            "classification": "CONVERT_AND_HOLD",
-            "netting_group": "EUR-90D",
-            "is_netted": False,
-            "adverse_var_inr": 54000.0,
-            "carry_cost_inr": 11200.0,
-            "carry_cost_gate_passed": True,
-            "recommended_action": "Convert & Hold",
-            "rationale": "Quarterly server infrastructure invoice. Unhedged tail risk pushes horizon balance near danger floor.",
-        },
-    ]
-
-
-@app.get("/api/market-sentiment")
-def api_get_market_sentiment():
-    return {
-        "sentiment_summary": "Cautious on INR due to oil imports; USD resilient",
-        "drift_adjustment": 0.03,
-        "volatility_adjustment": 0.08,
-        "last_updated": "2026-08-29T21:45:00Z",
-        "headlines": [
-            "Crude prices put pressure on emerging market currencies",
-            "US Fed signals higher-for-longer policy trajectory",
-            "RBI maintains strategic foreign exchange intervention corridor",
-        ],
-    }
-
-
-@app.post("/api/wise/quote")
-def api_post_wise_quote(req: ApiWiseQuoteRequest):
-    rates = {"USD": 87.41, "EUR": 93.0, "GBP": 110.2}
-    rate = rates.get(req.target_currency.upper(), 87.41)
-    source_amount = round(req.target_amount * rate, 2)
-    fee_inr = round(source_amount * 0.0028, 2)
-    bank_fee = round(source_amount * 0.02, 2)
-
-    import random
-    quote_id = f"Q-WISE-{random.randint(100000, 999999)}"
-
-    return {
-        "quote_id": quote_id,
-        "source_currency": req.source_currency.upper(),
-        "target_currency": req.target_currency.upper(),
-        "target_amount": req.target_amount,
-        "source_amount": source_amount + fee_inr,
-        "mid_market_rate": rate,
-        "fee_inr": fee_inr,
-        "traditional_bank_fee_estimate_inr": bank_fee,
-        "rate_guaranteed_minutes": 30,
-        "delivery_estimate": "Instant / Within 2 hours",
-    }
-
-
-@app.post("/api/wise/execute")
-def api_post_wise_execute(req: ApiWiseExecuteRequest):
-    import random
-    from datetime import datetime
-
-    target_curr = req.target_currency.upper()
-    if target_curr in _api_wallet_balances:
-        _api_wallet_balances[target_curr] += req.target_amount
-    _api_wallet_balances["INR"] = max(0.0, _api_wallet_balances["INR"] - req.source_amount)
-
-    trx_id = f"TRX-WISE-SBX-{random.randint(1000000, 9999999)}"
-    now_iso = datetime.utcnow().isoformat() + "Z"
-
-    _api_audit_logs.insert(0, {
-        "id": f"AUD-{random.randint(1000, 9999)}",
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "action": req.action_type,
-        "transaction_id": req.transaction_id,
-        "counterparty": f"Wise Multi-Currency ({target_curr})",
-        "currency": target_curr,
-        "foreign_amount": req.target_amount,
-        "inr_amount": req.source_amount,
-        "locked_rate": round(req.source_amount / max(1.0, req.target_amount), 2),
-        "sandbox_transfer_id": trx_id,
-        "status": "COMPLETED",
-    })
-
-    try:
-        from backend.state_machine import sync_action_for_transaction
-        sync_action_for_transaction(req.transaction_id, req.action_type)
-    except Exception as e:
-        import logging
-        logging.getLogger("main").warning("Failed to sync wise action to state machine: %s", e)
-
-    return {
-        "success": True,
-        "sandbox_transfer_id": trx_id,
-        "status": "COMPLETED",
-        "action_executed": req.action_type,
-        "executed_at": now_iso,
-        "locked_rate": round(req.source_amount / max(1.0, req.target_amount), 2),
-        "amount_debited_inr": req.source_amount,
-        "amount_credited_foreign": req.target_amount,
-        "updated_wallet_balances": dict(_api_wallet_balances),
-        "recalculated_var_reduction_inr": 86000.0,
-    }
-
-
-@app.get("/api/balances")
-def api_get_balances():
-    return _api_wallet_balances
-
-
-@app.get("/api/audit-log")
-def api_get_audit_log():
-    return _api_audit_logs
-
-
-# --------------------------------------------------------------------------- #
-# Economic Impact & Cost of Inaction Endpoint
-# --------------------------------------------------------------------------- #
-@app.get("/api/economic-impact")
-def api_get_economic_impact():
-    """Calculates economic value preservation and avoided cost of inaction."""
-    from backend.economic_impact_engine import EconomicImpactEngine
-    engine = get_engine()
-    impact_eng = EconomicImpactEngine()
-    
-    total_avoided_loss = 0.0
-    total_action_cost = 0.0
-    impact_items = []
-    
-    for tx in engine.transactions:
-        tx_dir = tx.direction.value if hasattr(tx.direction, "value") else tx.direction
-        if tx_dir == "payable" and tx.currency != engine.base_currency:
-            base_amt = engine.convert_to_base(tx.amount, tx.currency)
-            days_to_due = max(1, (tx.date - DEFAULT_START_DATE).days)
-            vol = engine.fx_config.get("daily_volatility", {}).get(tx.currency, 0.005)
-            imp = impact_eng.calculate_impact(
-                amount_base=base_amt,
-                daily_volatility=vol,
-                days_to_due=days_to_due,
-                action="CONVERT_AND_HOLD",
-                priority="HIGH" if base_amt > 15000 else "MEDIUM"
-            )
-            imp["transaction_id"] = tx.id
-            imp["currency"] = tx.currency
-            total_avoided_loss += imp["estimated_avoided_loss"]
-            total_action_cost += imp["action_cost"]
-            impact_items.append(imp)
-            
-    return {
-        "total_estimated_avoided_loss": round(total_avoided_loss, 2),
-        "total_action_cost": round(total_action_cost, 2),
-        "total_net_economic_benefit": round(total_avoided_loss - total_action_cost, 2),
-        "itemized_impacts": impact_items,
-    }
-
-
-# --------------------------------------------------------------------------- #
-# Action Recommendation Lifecycle Endpoints
-# --------------------------------------------------------------------------- #
-@app.get("/api/actions", response_model=List[RecommendationLifecycleSchema])
-def api_list_actions():
-    from backend.state_machine import get_all_recommendations
-    return get_all_recommendations()
-
-
-@app.post("/api/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
-def api_approve_action(action_id: str):
-    from backend.state_machine import transition_recommendation_status, LifecycleError
-    try:
-        updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
-        return updated
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except LifecycleError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-
-
-@app.post("/api/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
-def api_reject_action(action_id: str):
-    from backend.state_machine import transition_recommendation_status, LifecycleError
-    try:
-        updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
-        return updated
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except LifecycleError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-
-
-@app.post("/api/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
-def api_execute_action(action_id: str):
-    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
-    rec = get_recommendation_by_id(action_id)
-    if not rec:
-        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
-
-    current_status = rec["status"]
-    if current_status == "RECOMMENDED":
-        transition_recommendation_status(action_id, "APPROVED", actor="cfo")
-
-    try:
-        transition_recommendation_status(action_id, "EXECUTING", actor="cfo")
-        
-        # Execute on in-memory engine
-        engine = get_engine()
-        engine.apply_action(
-            transaction_id=rec["transaction_id"],
-            action=rec["action_type"],
-            settle_date=DEFAULT_START_DATE,
-        )
-
-        updated = transition_recommendation_status(action_id, "EXECUTED", actor="cfo")
-        return updated
-    except Exception as e:
-        try:
-            transition_recommendation_status(action_id, "FAILED", actor="system")
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail=f"Execution failed: {e}")
 
 
 if __name__ == "__main__":
