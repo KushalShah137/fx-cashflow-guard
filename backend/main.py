@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.cash_flow_engine import CashFlowEngine
 from backend.risk_model import run_monte_carlo_forecast, DEFAULT_START_DATE
+from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -113,6 +114,33 @@ def get_exposures():
 def get_demo_actions():
     engine = get_engine()
     return engine.get_demo_actions()
+
+
+@app.get("/risk-band")
+def risk_band(
+    days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
+    simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+):
+    engine = get_engine()
+    band = get_risk_band_v2(
+        engine=engine,
+        days=days,
+        n_simulations=simulations,
+        seed=42,
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+    )
+    return {
+        "days": days,
+        "simulations": simulations,
+        "currency": engine.base_currency,
+        "risk_band": band
+    }
+
+
+@app.get("/risk-diagnostics")
+def risk_diagnostics():
+    cache_path = DATA_PATH.parent / "fx_historical_cache.json"
+    return get_model_diagnostics(cache_path=cache_path)
 
 
 if __name__ == "__main__":
