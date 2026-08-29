@@ -242,6 +242,17 @@ class DecisionEngine:
                     )
                     reason_codes.append("LIQUIDITY_BUFFER_WARNING")
 
+            # Calculate economic impact
+            from backend.economic_impact_engine import EconomicImpactEngine
+            impact_eng = EconomicImpactEngine()
+            impact = impact_eng.calculate_impact(
+                amount_base=amount_base,
+                daily_volatility=vol,
+                days_to_due=days_to_due,
+                action=action.value,
+                priority=priority.value
+            )
+
             recommendations.append(
                 ActionRecommendation(
                     transaction_id=tx.id,
@@ -259,7 +270,7 @@ class DecisionEngine:
                     warnings=warnings,
                     amount_base=round(amount_base, 2),
                     recommended_amount=recommended_amount,
-                    expected_impact=None     # Future impact recalculation preview hook
+                    expected_impact=impact
                 )
             )
 

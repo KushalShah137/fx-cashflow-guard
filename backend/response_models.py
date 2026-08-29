@@ -105,6 +105,7 @@ class RiskClassificationResponse(BaseModel):
 
 
 class ActionRecommendationSchema(BaseModel):
+    action_id: Optional[str] = None
     transaction_id: str
     action: str
     currency: str
@@ -151,3 +152,20 @@ class DecisionResponse(BaseModel):
     decision_kpis: DecisionKPI
     recommendations: List[ActionRecommendationSchema]
     decision_context: DecisionEngineContext
+
+
+class RecommendationLifecycleSchema(BaseModel):
+    action_id: str
+    transaction_id: str
+    action_type: str
+    priority: str
+    risk_score: int
+    confidence: int
+    reason: str
+    risk_before: str
+    risk_after_estimate: str
+    estimated_action_cost: float
+    estimated_inaction_cost: float
+    status: str
+    created_at: str
+    updated_at: str

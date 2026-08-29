@@ -16,7 +16,7 @@ from backend.cash_flow_engine import CashFlowEngine
 from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
-from backend.response_models import RiskClassificationResponse, DecisionResponse
+from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -39,9 +39,42 @@ DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_transactions
 _engine_instance: Optional[CashFlowEngine] = None
 
 
+def save_and_enrich_recommendations(decisions: dict) -> dict:
+    from backend.state_machine import create_or_update_recommendation
+    enriched_recs = []
+    for r in decisions.get("recommendations", []):
+        impact = r.get("expected_impact", {}) or {}
+        rec_data = {
+            "transaction_id": r["transaction_id"],
+            "action_type": r["action"],
+            "priority": r["priority"],
+            "risk_score": r["risk_score"],
+            "confidence": 80,  # default placeholder until Phase 9
+            "reason": r["reason"],
+            "reason_codes": r.get("reason_codes", []),
+            "warnings": r.get("warnings", []),
+            "amount_base": r["amount_base"],
+            "recommended_amount": r.get("recommended_amount"),
+            "risk_before": r.get("risk_level", "LOW"),
+            "risk_after_estimate": "LOW" if r["action"] in ("CONVERT_AND_HOLD", "SETTLE_NOW", "RE_QUOTE") else r.get("risk_level", "LOW"),
+            "estimated_action_cost": impact.get("action_cost", 0.0),
+            "estimated_inaction_cost": impact.get("expected_inaction_cost", 0.0)
+        }
+        action_id = create_or_update_recommendation(rec_data)
+        r_copy = dict(r)
+        r_copy["action_id"] = action_id
+        enriched_recs.append(r_copy)
+    decisions_copy = dict(decisions)
+    decisions_copy["recommendations"] = enriched_recs
+    return decisions_copy
+
+
 def get_engine(reload: bool = False) -> CashFlowEngine:
     global _engine_instance
     if _engine_instance is None or reload:
+        if reload:
+            from backend.db import init_db
+            init_db(force=True)
         _engine_instance = CashFlowEngine.from_file(DATA_PATH)
     return _engine_instance
 
@@ -637,6 +670,7 @@ def risk_overview(
     # 4. Feed into Decision Engine
     dec_engine = DecisionEngine()
     decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+    decisions = save_and_enrich_recommendations(decisions)
     
     # 5. Extract exposures
     exposures = [e.to_dict() for e in engine.get_currency_exposures()]
@@ -668,7 +702,52 @@ def get_decisions(
     
     dec_engine = DecisionEngine()
     decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+    decisions = save_and_enrich_recommendations(decisions)
     return decisions
+
+
+# --------------------------------------------------------------------------- #
+# Action Lifecycle Endpoints
+# --------------------------------------------------------------------------- #
+from typing import List
+
+@app.get("/actions", response_model=List[RecommendationLifecycleSchema])
+def list_actions():
+    from backend.state_machine import get_all_recommendations
+    return get_all_recommendations()
+
+
+@app.get("/actions/{action_id}", response_model=RecommendationLifecycleSchema)
+def get_action(action_id: str):
+    from backend.state_machine import get_recommendation_by_id
+    action = get_recommendation_by_id(action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+    return action
+
+
+@app.post("/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
+def approve_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
+def reject_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 # --------------------------------------------------------------------------- #

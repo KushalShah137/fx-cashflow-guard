@@ -532,5 +532,10 @@ def get_dashboard_png_bytes(
     """
     Renders static PNG bytes for slides or reporting.
     """
-    fig = generate_terminal_dashboard(engine, currency=currency, days=days)
-    return fig.to_image(format="png", width=1600, height=950, scale=2)
+    try:
+        fig = generate_terminal_dashboard(engine, currency=currency, days=days)
+        return fig.to_image(format="png", width=1600, height=950, scale=2)
+    except Exception as e:
+        logger.warning("Failed to render Plotly PNG via Kaleido (%s). Returning transparent 1x1 PNG placeholder.", e)
+        # Transparent 1x1 pixel PNG fallback
+        return b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc`\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'

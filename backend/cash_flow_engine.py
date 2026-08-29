@@ -254,8 +254,34 @@ class CashFlowEngine:
                 f"{path} must contain a JSON object or array, got {type(data).__name__}"
             )
 
+        transactions_list = []
+        try:
+            from backend.db import init_db, get_db_connection
+            init_db()  # Ensures tables exist and are seeded
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM transactions")
+            db_rows = cursor.fetchall()
+            conn.close()
+            
+            for r in db_rows:
+                transactions_list.append({
+                    "id": r["id"],
+                    "date": r["date"],
+                    "currency": r["currency"],
+                    "amount": -r["amount"] if r["direction"] == "payable" else r["amount"],
+                    "description": r["description"],
+                    "type": r["category"],
+                    "status": r["status"],
+                    "demo_action": r["demo_action"],
+                    "demo_action_label": r["demo_action_label"]
+                })
+        except Exception as e:
+            logger.warning("Failed to load transactions from SQLite database (%s). Falling back to JSON.", e)
+            transactions_list = data.get("transactions", [])
+
         return cls(
-            transactions=data.get("transactions", []),
+            transactions=transactions_list,
             starting_balance=data.get("starting_balance", 0.0),
             danger_threshold=data.get("danger_threshold"),
             fx_config=data.get("fx_config", {}),
@@ -544,6 +570,11 @@ class CashFlowEngine:
                 )
                 self.transactions[i] = updated
                 logger.info("Transaction %s marked as SETTLED", transaction_id)
+                try:
+                    from backend.db import update_transaction_in_db
+                    update_transaction_in_db(updated)
+                except Exception as e:
+                    logger.warning("Failed to persist transaction settlement to SQLite: %s", e)
                 return updated
         raise InvalidTransactionError(f"No transaction found with id '{transaction_id}'")
 
@@ -594,6 +625,11 @@ class CashFlowEngine:
             )
             self.transactions[idx] = updated
             logger.info("Transaction %s: applied 'convert_and_hold'", transaction_id)
+            try:
+                from backend.db import update_transaction_in_db
+                update_transaction_in_db(updated)
+            except Exception as e:
+                logger.warning("Failed to persist action update to SQLite: %s", e)
             return updated
 
         elif action_norm == "settle_now":
@@ -612,6 +648,11 @@ class CashFlowEngine:
             )
             self.transactions[idx] = updated
             logger.info("Transaction %s: applied 'settle_now'", transaction_id)
+            try:
+                from backend.db import update_transaction_in_db
+                update_transaction_in_db(updated)
+            except Exception as e:
+                logger.warning("Failed to persist action update to SQLite: %s", e)
             return updated
 
         else:
