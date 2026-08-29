@@ -223,6 +223,60 @@ def get_decisions(
     return decisions
 
 
+# --------------------------------------------------------------------------- #
+# Visualization Endpoints (Bloomberg-Terminal Style)
+# --------------------------------------------------------------------------- #
+from fastapi.responses import HTMLResponse, Response
+from backend.visualization import get_dashboard_html, get_dashboard_png_bytes
+
+
+@app.get("/viz/health")
+def viz_health():
+    """Health check for the standalone visualization telemetry module."""
+    return {
+        "status": "ok",
+        "module": "backend.visualization",
+        "theme": "bloomberg_terminal_dark",
+        "panels": [
+            "90-Day Cash Flow Risk Bands & Danger Floor",
+            "Multi-Currency Net Exposure Matrix",
+            "Real 2-Year Historical FX Volatility",
+            "90-Day Transaction Flow Timeline & Hedge Triggers",
+        ],
+        "endpoints": [
+            "/viz/dashboard",
+            "/viz/dashboard.png",
+            "/viz/health",
+        ],
+    }
+
+
+@app.get("/viz/dashboard", response_class=HTMLResponse)
+def viz_dashboard(
+    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
+    days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
+):
+    """
+    Renders the live multi-panel Bloomberg-terminal-style dashboard as standalone interactive HTML.
+    """
+    engine = get_engine()
+    html_content = get_dashboard_html(engine=engine, currency=currency, days=days)
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+@app.get("/viz/dashboard.png")
+def viz_dashboard_png(
+    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
+    days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
+):
+    """
+    Renders the live multi-panel Bloomberg-terminal-style dashboard as a static PNG image.
+    """
+    engine = get_engine()
+    png_bytes = get_dashboard_png_bytes(engine=engine, currency=currency, days=days)
+    return Response(content=png_bytes, media_type="image/png")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)

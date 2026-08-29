@@ -172,6 +172,26 @@ class TestBackendHealthAndEndpoints(unittest.TestCase):
         pts = action_res.json()
         self.assertEqual(len(pts), 90)
 
+    def test_16_viz_health(self):
+        res = self.client.get("/viz/health")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "ok")
+        self.assertIn("/viz/dashboard", data["endpoints"])
+
+    def test_17_viz_dashboard_html(self):
+        res = self.client.get("/viz/dashboard?currency=USD&days=90")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("text/html", res.headers["content-type"])
+        self.assertIn("<html", res.text.lower())
+        self.assertIn("plotly", res.text.lower())
+
+    def test_18_viz_dashboard_png(self):
+        res = self.client.get("/viz/dashboard.png?currency=USD&days=90")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers["content-type"], "image/png")
+        self.assertGreater(len(res.content), 10000)
+
 
 if __name__ == "__main__":
     unittest.main()
