@@ -8,3 +8,4 @@ python-dotenv>=1.0.0
 plotly>=5.20.0
 matplotlib>=3.8.0
 kaleido>=0.2.1
+openai>=1.0.0

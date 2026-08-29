@@ -112,6 +112,71 @@ class TestRiskModelV2(unittest.TestCase):
         self.assertIn("currencies_modeled", diag)
         self.assertIn("correlation_matrix", diag)
 
+    def test_news_parameter_computation(self):
+        from backend.risk_model_v2 import compute_news_parameters
+        mock_news = {
+            "currencies": {
+                "EUR": {
+                    "effective": {"drift_bias_bps": -20.0, "volatility_multiplier": 1.5},
+                    "decay_days": 4,
+                }
+            }
+        }
+        mu, alpha = compute_news_parameters(mock_news, ["EUR", "GBP"], days=10)
+        # Day 0: full effect
+        self.assertAlmostEqual(mu[0, 0], -0.0020, places=4)
+        self.assertAlmostEqual(alpha[0, 0], 1.5, places=2)
+        # GBP unaffected
+        self.assertAlmostEqual(mu[0, 1], 0.0)
+        self.assertAlmostEqual(alpha[0, 1], 1.0)
+        # Day 4+: decayed back to baseline
+        self.assertAlmostEqual(mu[4, 0], 0.0)
+        self.assertAlmostEqual(alpha[4, 0], 1.0)
+
+    def test_news_sentiment_injection_expands_band(self):
+        engine = CashFlowEngine(
+            transactions=[
+                {"id": "t_start", "date": "2026-09-01", "type": "payable", "amount": 0, "currency": "USD"},
+                {"id": "t_eur", "date": "2026-09-06", "type": "payable", "amount": 25000, "currency": "EUR"},
+            ],
+            starting_balance=50000,
+            danger_threshold=20000,
+            fx_config={"base_currency": "USD", "rates": {"USD": 1.0, "EUR": 1.08, "GBP": 1.28}},
+        )
+        # Run baseline simulation
+        base_band = get_risk_band(
+            engine, days=30, n_simulations=2000, seed=42, news_sentiment=None, news_cache_path=None
+        )
+        # Run shocked simulation with EUR elevated volatility
+        mock_news = {
+            "currencies": {
+                "EUR": {
+                    "effective": {"drift_bias_bps": -30.0, "volatility_multiplier": 1.8},
+                    "decay_days": 10,
+                }
+            }
+        }
+        shocked_band = get_risk_band(
+            engine, days=30, n_simulations=2000, seed=42, news_sentiment=mock_news, news_cache_path=None
+        )
+
+        # Day 6 (settlement date offset 5) shock width should be strictly wider
+        base_width_d5 = base_band[5]["p95"] - base_band[5]["p5"]
+        shock_width_d5 = shocked_band[5]["p95"] - shocked_band[5]["p5"]
+        self.assertGreater(shock_width_d5, base_width_d5)
+
+    def test_news_sentiment_none_matches_baseline(self):
+        band_1 = get_risk_band(
+            self.engine, days=15, n_simulations=500, seed=42, news_sentiment=None, news_cache_path=None
+        )
+        band_2 = get_risk_band(
+            self.engine, days=15, n_simulations=500, seed=42, news_sentiment={}, news_cache_path=None
+        )
+        for p1, p2 in zip(band_1, band_2):
+            self.assertEqual(p1["p5"], p2["p5"])
+            self.assertEqual(p1["p50"], p2["p50"])
+            self.assertEqual(p1["p95"], p2["p95"])
+
 
 if __name__ == "__main__":
     unittest.main()

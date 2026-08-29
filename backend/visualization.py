@@ -97,7 +97,9 @@ def add_risk_bands_trace(
     row: int = 1,
     col: int = 1,
 ) -> None:
-    band_points = get_risk_band_v2(engine=engine, days=days, n_simulations=1000, seed=42)
+    from backend.risk_model_v2 import NEWS_CACHE_PATH, load_news_sentiment_cache
+    news_adj = load_news_sentiment_cache(NEWS_CACHE_PATH)
+    band_points = get_risk_band_v2(engine=engine, days=days, n_simulations=1000, seed=42, news_adjustments=news_adj)
     dates = [p["date"] for p in band_points]
     p5_vals = [p["p5"] for p in band_points]
     p50_vals = [p["p50"] for p in band_points]

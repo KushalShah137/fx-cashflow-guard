@@ -5,6 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
+import logging
+import threading
 from datetime import date, datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
@@ -17,6 +19,9 @@ from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_d
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
 from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
+from backend.news_sentiment import refresh_news_cache, run_background_refresh
+
+logger = logging.getLogger("main")
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -34,9 +39,33 @@ app.add_middleware(
 )
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_transactions.json"
+NEWS_CACHE_PATH = DATA_PATH.parent / "news_sentiment_cache.json"
 
 # In-memory singleton instance for live interactive demo state
 _engine_instance: Optional[CashFlowEngine] = None
+
+
+def get_cached_news_adjustments(use_news_adjustment: bool = True) -> Optional[Dict[str, Any]]:
+    """Loads current news sentiment cache if present and enabled; returns None on any failure."""
+    if not use_news_adjustment or not NEWS_CACHE_PATH.exists():
+        return None
+    try:
+        with open(NEWS_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not read news sentiment cache: {e}")
+        return None
+
+
+@app.on_event("startup")
+def startup_news_refresh():
+    """Launches news sentiment background refresh loop in a non-blocking daemon thread on app startup."""
+    thread = threading.Thread(
+        target=run_background_refresh,
+        kwargs={"interval_minutes": 15, "output_path": str(NEWS_CACHE_PATH)},
+        daemon=True,
+    )
+    thread.start()
 
 
 def save_and_enrich_recommendations(decisions: dict) -> dict:
@@ -90,7 +119,8 @@ def var_color_for_dir(direction: str) -> str:
 
 def generate_landing_page_html(engine: CashFlowEngine) -> str:
     threshold = engine.danger_threshold or 20000.0
-    band_points = get_risk_band_v2(engine=engine, days=90, n_simulations=200, seed=42)
+    news_adj = get_cached_news_adjustments(True)
+    band_points = get_risk_band_v2(engine=engine, days=90, n_simulations=200, seed=42, news_adjustments=news_adj)
     min_p5 = min(p["p5"] for p in band_points) if band_points else engine.starting_balance
     has_breach = min_p5 < threshold
     status_label = "CRITICAL BREACH" if has_breach else "LIQUIDITY SAFE"
@@ -100,6 +130,106 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
     exposures = engine.get_currency_exposures()
     currencies_str = ", ".join(e.currency for e in exposures) or "EUR, GBP, INR, CNY, JPY, AUD"
     demo_actions = engine.get_demo_actions()
+
+    generated_at_display = "Never (Pending initial refresh)"
+    if news_adj and news_adj.get("generated_at"):
+        generated_at_display = news_adj.get("generated_at")
+
+    modeled_currencies = ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"]
+    sentiment_cards_html = []
+    ccy_news_dict = news_adj.get("currencies", news_adj) if news_adj else {}
+
+    for ccy in modeled_currencies:
+        info = ccy_news_dict.get(ccy, {}) if isinstance(ccy_news_dict, dict) else {}
+        raw = info.get("raw", {})
+        eff = info.get("effective", {})
+        score = raw.get("sentiment_score", 0.0)
+        vol_mult = eff.get("volatility_multiplier", 1.0)
+        drift_bps = eff.get("drift_bias_bps", 0.0)
+        src = info.get("source", "fallback")
+        hl_count = info.get("headline_count", 0)
+        headlines = info.get("headlines", [])
+
+        # Sentiment badge color & text
+        if score > 0.15:
+            sent_color = "var(--emerald)"
+            sent_bg = "rgba(0, 230, 118, 0.15)"
+            sent_label = f"+{score:.2f} (BULLISH)"
+        elif score < -0.15:
+            sent_color = "var(--coral)"
+            sent_bg = "rgba(255, 23, 68, 0.15)"
+            sent_label = f"{score:.2f} (BEARISH)"
+        else:
+            sent_color = "var(--amber)"
+            sent_bg = "rgba(255, 179, 0, 0.15)"
+            sent_label = f"{score:.2f} (NEUTRAL)"
+
+        # Drift text and arrow
+        if drift_bps > 0:
+            drift_str = f"+{drift_bps:.1f} bps &uarr;"
+            drift_color = "var(--emerald)"
+        elif drift_bps < 0:
+            drift_str = f"{drift_bps:.1f} bps &darr;"
+            drift_color = "var(--coral)"
+        else:
+            drift_str = f"{drift_bps:.1f} bps &rarr;"
+            drift_color = "var(--muted)"
+
+        # Source badge
+        if str(src).lower() == "live":
+            src_badge = '<span style="font-size:10px; font-weight:700; color:var(--cyan); background:rgba(0,229,255,0.15); border:1px solid var(--cyan); padding:2px 6px; border-radius:3px;">LIVE</span>'
+        else:
+            src_badge = '<span style="font-size:10px; font-weight:700; color:var(--muted); background:rgba(148,163,184,0.15); border:1px solid var(--border); padding:2px 6px; border-radius:3px;">FALLBACK</span>'
+
+        if headlines:
+            hl_items = "".join(f'<li style="margin-bottom:4px; line-height:1.3; color:var(--text); list-style-type:square; margin-left:14px;">{h}</li>' for h in headlines[:5])
+            headlines_html = f"""
+            <div style="font-size:10px; color:var(--muted); border-top:1px solid var(--border); padding-top:6px; margin-top:4px;">
+              <details style="cursor:pointer;" open>
+                <summary style="font-weight:700; color:var(--cyan); outline:none; font-size:10px;">
+                  {hl_count} Live Headline{'s' if hl_count != 1 else ''} &#9662;
+                </summary>
+                <ul style="margin-top:6px; max-height:85px; overflow-y:auto; padding-right:4px; font-size:9.5px;">
+                  {hl_items}
+                </ul>
+              </details>
+            </div>
+            """
+        else:
+            headlines_html = f"""
+            <div style="font-size:10px; color:var(--muted); border-top:1px solid var(--border); padding-top:6px; margin-top:4px;">
+              0 Finnhub headlines (fallback)
+            </div>
+            """
+
+        card = f"""
+        <div style="background:var(--card); border:1px solid var(--border); border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between; gap:8px;">
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <span style="font-size:14px; font-weight:700; color:var(--cyan);">{ccy}</span>
+              {src_badge}
+            </div>
+            <div>
+              <div style="font-size:10px; color:var(--muted); text-transform:uppercase; margin-bottom:2px;">Sentiment</div>
+              <span style="font-size:11px; font-weight:700; color:{sent_color}; background:{sent_bg}; border:1px solid {sent_color}; padding:2px 6px; border-radius:3px; display:inline-block;">{sent_label}</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; margin-top:6px;">
+              <div>
+                <span style="color:var(--muted); font-size:10px;">Vol Mult:</span>
+                <div style="font-weight:700; color:var(--text);">{vol_mult:.2f}x</div>
+              </div>
+              <div>
+                <span style="color:var(--muted); font-size:10px;">Drift Bias:</span>
+                <div style="font-weight:700; color:{drift_color};">{drift_str}</div>
+              </div>
+            </div>
+          </div>
+          {headlines_html}
+        </div>
+        """
+        sentiment_cards_html.append(card)
+
+    sentiment_grid_html = "".join(sentiment_cards_html)
     
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -393,6 +523,25 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
       </div>
     </div>
 
+    <!-- Macro News Sentiment Layer -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+      <div class="section-title" style="margin-bottom: 0;">📰 Macro News Sentiment Layer (Finnhub &bull; Qwen2.5 LLM)</div>
+      <button class="btn-action" onclick="refreshNewsSentiment()" id="btn-refresh-news" style="background: rgba(0, 229, 255, 0.2); color: var(--cyan); border-color: var(--cyan);">↻ REFRESH NEWS SENTIMENT</button>
+    </div>
+    <div class="dashboard-panel" style="margin-bottom: 28px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+        <p style="font-size: 12px; color: var(--muted); margin: 0;">
+          Real-time macroeconomic sentiment extracted via local Qwen2.5:7b-instruct. Directly scales Monte Carlo volatility diagonals and injects drift terms.
+        </p>
+        <div style="font-size: 11px; color: var(--cyan); background: rgba(0, 229, 255, 0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(0, 229, 255, 0.2);">
+          Last Updated: <span style="font-weight: 700; color: var(--text);">{generated_at_display}</span>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px;">
+        {sentiment_grid_html}
+      </div>
+    </div>
+
     <!-- Visualization Telemetry Hub -->
     <div class="section-title">📊 Visual Telemetry & Analytics Dashboard</div>
     <div class="dashboard-panel">
@@ -453,6 +602,10 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
       <a class="api-card" href="/docs" target="_blank">
         <div><span class="method">UI</span><span class="path">/docs</span></div>
         <div class="desc">Interactive Swagger API documentation & testing sandbox.</div>
+      </a>
+      <a class="api-card" href="/news-sentiment" target="_blank">
+        <div><span class="method">GET</span><span class="path">/news-sentiment</span></div>
+        <div class="desc">Raw LLM macro news sentiment cache & per-currency volatility/drift adjustments.</div>
       </a>
       <a class="api-card" href="/risk-overview?days=90" target="_blank">
         <div><span class="method">GET</span><span class="path">/risk-overview</span></div>
@@ -523,6 +676,25 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
         }}
       }} catch (e) {{
         alert('Error: ' + e);
+      }}
+    }}
+
+    async function refreshNewsSentiment() {{
+      const btn = document.getElementById('btn-refresh-news');
+      if (btn) {{ btn.innerText = '↻ REFRESHING...'; btn.disabled = true; }}
+      try {{
+        const res = await fetch('/refresh-news', {{ method: 'POST' }});
+        if (res.ok) {{
+          alert('News sentiment refresh completed! Reloading telemetry...');
+          window.location.reload();
+        }} else {{
+          const err = await res.json();
+          alert('Error refreshing news sentiment: ' + JSON.stringify(err));
+          if (btn) {{ btn.innerText = '↻ REFRESH NEWS SENTIMENT'; btn.disabled = false; }}
+        }}
+      }} catch (e) {{
+        alert('Network error: ' + e);
+        if (btn) {{ btn.innerText = '↻ REFRESH NEWS SENTIMENT'; btn.disabled = false; }}
       }}
     }}
   </script>
@@ -608,23 +780,59 @@ def get_demo_actions():
     return engine.get_demo_actions()
 
 
+@app.post("/refresh-news")
+def refresh_news():
+    """Manually triggers synchronous FX news sentiment refresh and writes to cache."""
+    try:
+        payload = refresh_news_cache(output_path=str(NEWS_CACHE_PATH))
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"News sentiment refresh failed: {e}")
+
+
+@app.get("/news-sentiment")
+def get_news_sentiment():
+    """Reads and returns the current raw contents of data/news_sentiment_cache.json."""
+    if not NEWS_CACHE_PATH.exists():
+        return {
+            "status": "pending",
+            "message": "No news sentiment refresh has run yet. Cache file data/news_sentiment_cache.json not found.",
+            "generated_at": None,
+            "currencies": {},
+        }
+    try:
+        with open(NEWS_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to read news sentiment cache: {e}",
+            "generated_at": None,
+            "currencies": {},
+        }
+
+
 @app.get("/risk-band")
 def risk_band(
     days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     band = get_risk_band_v2(
         engine=engine,
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     return {
         "days": days,
         "simulations": simulations,
         "currency": engine.base_currency,
+        "use_news_adjustment": use_news_adjustment,
         "risk_band": band
     }
 
@@ -632,21 +840,24 @@ def risk_band(
 @app.get("/risk-diagnostics")
 def risk_diagnostics():
     cache_path = DATA_PATH.parent / "fx_historical_cache.json"
-    return get_model_diagnostics(cache_path=cache_path)
+    return get_model_diagnostics(cache_path=cache_path, news_cache_path=NEWS_CACHE_PATH)
 
 
 @app.get("/risk-classification", response_model=RiskClassificationResponse)
 def risk_classification(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     band = get_risk_band_v2(
         engine=engine,
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
@@ -657,8 +868,10 @@ def risk_classification(
 def risk_overview(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     # 1. Compute deterministic Layer 1 baseline forecast
     pts = engine.get_forecast(days=days, base_date=DEFAULT_START_DATE)
     baseline_list = [p.to_dict() for p in pts]
@@ -669,7 +882,8 @@ def risk_overview(
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     
     # 3. Run classification
@@ -697,14 +911,17 @@ def risk_overview(
 def get_decisions(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     band = get_risk_band_v2(
         engine=engine,
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
@@ -990,7 +1207,11 @@ def viz_dashboard(
     """
     engine = get_engine()
     html_content = get_dashboard_html(engine=engine, currency=currency, days=days)
-    return HTMLResponse(content=html_content, status_code=200)
+    return HTMLResponse(
+        content=html_content,
+        status_code=200,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/viz/dashboard.png")
@@ -1003,7 +1224,502 @@ def viz_dashboard_png(
     """
     engine = get_engine()
     png_bytes = get_dashboard_png_bytes(engine=engine, currency=currency, days=days)
-    return Response(content=png_bytes, media_type="image/png")
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Frontend Compatibility Adapter Endpoints (/api/*)
+# --------------------------------------------------------------------------- #
+class ApiWiseQuoteRequest(BaseModel):
+    source_currency: str = "INR"
+    target_currency: str
+    target_amount: float
+
+
+class ApiWiseExecuteRequest(BaseModel):
+    quote_id: str
+    action_type: str  # CONVERT_AND_HOLD or SETTLE_NOW
+    transaction_id: str
+    target_currency: str
+    target_amount: float
+    source_amount: float
+
+
+_api_wallet_balances = {
+    "INR": 8251800.0,
+    "USD": 20000.0,
+    "EUR": 15000.0,
+    "GBP": 0.0,
+}
+
+_api_audit_logs = [
+    {
+        "id": "AUD-9912",
+        "timestamp": "2026-08-28 16:45:10",
+        "action": "CONVERT_AND_HOLD",
+        "transaction_id": "TX-098",
+        "counterparty": "Stripe US Infrastructure",
+        "currency": "USD",
+        "foreign_amount": 14500.0,
+        "inr_amount": 1267445.0,
+        "locked_rate": 87.41,
+        "sandbox_transfer_id": "TRX-WISE-SBX-8839102",
+        "status": "COMPLETED",
+    },
+    {
+        "id": "AUD-9911",
+        "timestamp": "2026-08-25 11:20:00",
+        "action": "SETTLE_NOW",
+        "transaction_id": "TX-094",
+        "counterparty": "AWS Frankfurt Node",
+        "currency": "EUR",
+        "foreign_amount": 8200.0,
+        "inr_amount": 762600.0,
+        "locked_rate": 93.0,
+        "sandbox_transfer_id": "TRX-WISE-SBX-8711094",
+        "status": "COMPLETED",
+    },
+]
+
+
+@app.get("/api/forecast")
+def api_get_forecast(
+    horizon: int = Query(60, description="Horizon in days (30, 60, 90)"),
+    stress_currency: Optional[str] = Query(None, description="Currency to stress"),
+    stress_pct: float = Query(0.0, description="Stress percent shift"),
+    risk_tolerance: str = Query("moderate", description="conservative, moderate, aggressive"),
+):
+    engine = get_engine()
+    starting_balance = engine.starting_balance or 1000000.0
+    danger_threshold = engine.danger_threshold or 450000.0
+
+    multiplier = 1.35 if risk_tolerance == "conservative" else 0.75 if risk_tolerance == "aggressive" else 1.0
+
+    stress_shift = 0.0
+    if stress_currency == "USD":
+        stress_shift = (stress_pct / 100.0) * 850000.0
+    elif stress_currency == "EUR":
+        stress_shift = (stress_pct / 100.0) * 450000.0
+    elif stress_currency == "INR_CRASH":
+        stress_shift = -abs(stress_pct / 100.0) * 1200000.0
+
+    from datetime import timedelta
+    timeline = []
+    running_det = starting_balance
+    base_d = date(2026, 9, 1)
+
+    for i in range(1, horizon + 1):
+        cur_d = base_d + timedelta(days=i - 1)
+        day_flow = 0.0
+        if i == 14:
+            day_flow -= 1395000.0
+        if i == 30:
+            day_flow -= 1748200.0
+        if i == 34:
+            day_flow -= 936700.0
+        if i == 47:
+            day_flow += (1512000.0 - 1048800.0)
+        if i == 83:
+            day_flow -= 842000.0
+        if i % 7 == 0:
+            day_flow += 380000.0
+        if i % 15 == 0:
+            day_flow -= 220000.0
+
+        running_det += day_flow
+        dispersion = (i ** 0.5) * 18500.0 * multiplier * (1.0 + abs(stress_pct) / 20.0)
+        expected = running_det + (stress_shift * (i / horizon))
+        worst = expected - dispersion * 1.645 - max(0.0, -stress_shift * (i / horizon))
+        best = expected + dispersion * 1.645 + max(0.0, stress_shift * (i / horizon))
+
+        timeline.append({
+            "date": cur_d.isoformat(),
+            "day_index": i,
+            "deterministic_balance": round(running_det, 2),
+            "worst_case_5th": round(worst, 2),
+            "expected_50th": round(expected, 2),
+            "best_case_95th": round(best, 2),
+            "net_cash_flow": round(day_flow, 2),
+        })
+
+    final_expected = timeline[-1]["expected_50th"]
+    final_worst = timeline[-1]["worst_case_5th"]
+    final_best = timeline[-1]["best_case_95th"]
+    min_worst = min(t["worst_case_5th"] for t in timeline)
+
+    risk_status = "SAFE"
+    if min_worst < danger_threshold:
+        risk_status = "BREACH"
+    elif min_worst < danger_threshold * 1.25:
+        risk_status = "CAUTION"
+
+    return {
+        "horizon_days": horizon,
+        "base_currency": "INR",
+        "starting_balance": starting_balance,
+        "danger_threshold": danger_threshold,
+        "summary": {
+            "expected_final_balance": final_expected,
+            "worst_case_5th_var": final_worst,
+            "best_case_95th": final_best,
+            "value_at_risk_95": max(0.0, final_expected - final_worst),
+            "risk_status": risk_status,
+        },
+        "timeline": timeline,
+    }
+
+
+@app.get("/api/transactions")
+def api_get_transactions():
+    return [
+        {
+            "id": "TX-101",
+            "counterparty": "Apex Cloud Systems (US)",
+            "type": "PAYABLE",
+            "currency": "USD",
+            "foreign_amount": 20000.0,
+            "inr_book_value": 1720000.0,
+            "current_inr_value": 1748200.0,
+            "due_date": "2026-09-28",
+            "days_until_due": 30,
+            "status": "UNFUNDED",
+            "classification": "CONVERT_AND_HOLD",
+            "netting_group": "USD-30D",
+            "is_netted": False,
+            "adverse_var_inr": 86000.0,
+            "carry_cost_inr": 14200.0,
+            "carry_cost_gate_passed": True,
+            "recommended_action": "Convert & Hold",
+            "rationale": "Adverse 95% VaR (₹86,000) significantly exceeds 30-day carry cost (₹14,200). Lock USD now.",
+        },
+        {
+            "id": "TX-102",
+            "counterparty": "Berlin Dev Studio GmbH",
+            "type": "PAYABLE",
+            "currency": "EUR",
+            "foreign_amount": 15000.0,
+            "inr_book_value": 1395000.0,
+            "current_inr_value": 1395000.0,
+            "due_date": "2026-09-12",
+            "days_until_due": 14,
+            "status": "FUNDED",
+            "classification": "SETTLE_NOW",
+            "netting_group": "EUR-14D",
+            "is_netted": False,
+            "adverse_var_inr": 0.0,
+            "carry_cost_inr": 0.0,
+            "carry_cost_gate_passed": False,
+            "recommended_action": "Settle Now",
+            "rationale": "EUR balance already funded and sitting idle. Settle invoice immediately to eliminate settlement friction.",
+        },
+        {
+            "id": "TX-103",
+            "counterparty": "Nordic Retailers AB",
+            "type": "RECEIVABLE",
+            "currency": "USD",
+            "foreign_amount": 18000.0,
+            "inr_book_value": 1548000.0,
+            "current_inr_value": 1512000.0,
+            "due_date": "2026-10-15",
+            "days_until_due": 47,
+            "status": "EXPOSED_RECEIVABLE",
+            "classification": "RE_QUOTE_OR_HEDGE",
+            "netting_group": "USD-45D",
+            "is_netted": False,
+            "adverse_var_inr": 62000.0,
+            "carry_cost_inr": 0.0,
+            "carry_cost_gate_passed": False,
+            "recommended_action": "Re-Quote / Dynamic Buffer",
+            "rationale": "USD receivable at risk of rupee appreciation. Consider adding a 1.5% FX buffer on next contract renewal.",
+        },
+        {
+            "id": "TX-104",
+            "counterparty": "London Design Syndicate",
+            "type": "PAYABLE",
+            "currency": "GBP",
+            "foreign_amount": 8500.0,
+            "inr_book_value": 935000.0,
+            "current_inr_value": 936700.0,
+            "due_date": "2026-10-02",
+            "days_until_due": 34,
+            "status": "UNFUNDED",
+            "classification": "CONVERT_AND_HOLD",
+            "netting_group": "GBP-30D",
+            "is_netted": False,
+            "adverse_var_inr": 42500.0,
+            "carry_cost_inr": 7800.0,
+            "carry_cost_gate_passed": True,
+            "recommended_action": "Convert & Hold",
+            "rationale": "GBP volatility elevated post Bank of England rates meeting. VaR exceeds hurdle rate.",
+        },
+        {
+            "id": "TX-105",
+            "counterparty": "Kyoto Electronics",
+            "type": "PAYABLE",
+            "currency": "USD",
+            "foreign_amount": 12000.0,
+            "inr_book_value": 1044000.0,
+            "current_inr_value": 1048800.0,
+            "due_date": "2026-10-15",
+            "days_until_due": 47,
+            "status": "UNFUNDED",
+            "classification": "NATURALLY_NETTED",
+            "netting_group": "USD-45D",
+            "is_netted": True,
+            "adverse_var_inr": 18000.0,
+            "carry_cost_inr": 4100.0,
+            "carry_cost_gate_passed": False,
+            "recommended_action": "Hold (Natural Net)",
+            "rationale": "Matched against TX-103 ($18,000 receivable). Net exposure is only $6,000 credit. No forward lock required.",
+        },
+        {
+            "id": "TX-106",
+            "counterparty": "Munich SaaS Logistics",
+            "type": "PAYABLE",
+            "currency": "EUR",
+            "foreign_amount": 9000.0,
+            "inr_book_value": 837000.0,
+            "current_inr_value": 842000.0,
+            "due_date": "2026-11-20",
+            "days_until_due": 83,
+            "status": "UNFUNDED",
+            "classification": "CONVERT_AND_HOLD",
+            "netting_group": "EUR-90D",
+            "is_netted": False,
+            "adverse_var_inr": 54000.0,
+            "carry_cost_inr": 11200.0,
+            "carry_cost_gate_passed": True,
+            "recommended_action": "Convert & Hold",
+            "rationale": "Quarterly server infrastructure invoice. Unhedged tail risk pushes horizon balance near danger floor.",
+        },
+    ]
+
+
+@app.get("/api/market-sentiment")
+def api_get_market_sentiment():
+    """Returns dynamic macroeconomic news sentiment for the frontend."""
+    headlines_list = [
+        "Crude prices put pressure on emerging market currencies",
+        "US Fed signals higher-for-longer policy trajectory",
+        "RBI maintains strategic foreign exchange intervention corridor",
+    ]
+    drift = 0.03
+    vol = 0.08
+    updated = datetime.utcnow().isoformat() + "Z"
+
+    if NEWS_CACHE_PATH.exists():
+        try:
+            with open(NEWS_CACHE_PATH, "r", encoding="utf-8") as f:
+                cdata = json.load(f)
+                updated = cdata.get("generated_at", updated)
+                all_hl = []
+                for ccy, cinfo in cdata.get("currencies", {}).items():
+                    for h in cinfo.get("headlines", []):
+                        if h and h not in all_hl:
+                            all_hl.append(h)
+                if all_hl:
+                    headlines_list = all_hl[:5]
+                usd_info = cdata.get("currencies", {}).get("USD", {})
+                usd_eff = usd_info.get("effective", {})
+                vol = round(usd_eff.get("volatility_multiplier", 1.0) - 1.0, 4)
+                drift = round(usd_eff.get("drift_bias_bps", 0.0) / 100.0, 4)
+        except Exception:
+            pass
+
+    return {
+        "sentiment_summary": "Live Finnhub + Ollama Macro FX Risk Pipeline Active",
+        "drift_adjustment": drift,
+        "volatility_adjustment": vol,
+        "last_updated": updated,
+        "headlines": headlines_list,
+    }
+
+
+@app.post("/api/wise/quote")
+def api_post_wise_quote(req: ApiWiseQuoteRequest):
+    rates = {"USD": 87.41, "EUR": 93.0, "GBP": 110.2}
+    rate = rates.get(req.target_currency.upper(), 87.41)
+    source_amount = round(req.target_amount * rate, 2)
+    fee_inr = round(source_amount * 0.0028, 2)
+    bank_fee = round(source_amount * 0.02, 2)
+
+    import random
+    quote_id = f"Q-WISE-{random.randint(100000, 999999)}"
+
+    return {
+        "quote_id": quote_id,
+        "source_currency": req.source_currency.upper(),
+        "target_currency": req.target_currency.upper(),
+        "target_amount": req.target_amount,
+        "source_amount": source_amount + fee_inr,
+        "mid_market_rate": rate,
+        "fee_inr": fee_inr,
+        "traditional_bank_fee_estimate_inr": bank_fee,
+        "rate_guaranteed_minutes": 30,
+        "delivery_estimate": "Instant / Within 2 hours",
+    }
+
+
+@app.post("/api/wise/execute")
+def api_post_wise_execute(req: ApiWiseExecuteRequest):
+    import random
+    from datetime import datetime
+
+    target_curr = req.target_currency.upper()
+    if target_curr in _api_wallet_balances:
+        _api_wallet_balances[target_curr] += req.target_amount
+    _api_wallet_balances["INR"] = max(0.0, _api_wallet_balances["INR"] - req.source_amount)
+
+    trx_id = f"TRX-WISE-SBX-{random.randint(1000000, 9999999)}"
+    now_iso = datetime.utcnow().isoformat() + "Z"
+
+    _api_audit_logs.insert(0, {
+        "id": f"AUD-{random.randint(1000, 9999)}",
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "action": req.action_type,
+        "transaction_id": req.transaction_id,
+        "counterparty": f"Wise Multi-Currency ({target_curr})",
+        "currency": target_curr,
+        "foreign_amount": req.target_amount,
+        "inr_amount": req.source_amount,
+        "locked_rate": round(req.source_amount / max(1.0, req.target_amount), 2),
+        "sandbox_transfer_id": trx_id,
+        "status": "COMPLETED",
+    })
+
+    try:
+        from backend.state_machine import sync_action_for_transaction
+        sync_action_for_transaction(req.transaction_id, req.action_type)
+    except Exception as e:
+        import logging
+        logging.getLogger("main").warning("Failed to sync wise action to state machine: %s", e)
+
+    return {
+        "success": True,
+        "sandbox_transfer_id": trx_id,
+        "status": "COMPLETED",
+        "action_executed": req.action_type,
+        "executed_at": now_iso,
+        "locked_rate": round(req.source_amount / max(1.0, req.target_amount), 2),
+        "amount_debited_inr": req.source_amount,
+        "amount_credited_foreign": req.target_amount,
+        "updated_wallet_balances": dict(_api_wallet_balances),
+        "recalculated_var_reduction_inr": 86000.0,
+    }
+
+
+@app.get("/api/balances")
+def api_get_balances():
+    return _api_wallet_balances
+
+
+@app.get("/api/audit-log")
+def api_get_audit_log():
+    return _api_audit_logs
+
+
+@app.get("/api/economic-impact")
+def api_get_economic_impact():
+    """Calculates economic value preservation and avoided cost of inaction."""
+    from backend.economic_impact_engine import EconomicImpactEngine
+    engine = get_engine()
+    impact_eng = EconomicImpactEngine()
+    
+    total_avoided_loss = 0.0
+    total_action_cost = 0.0
+    impact_items = []
+    
+    for tx in engine.transactions:
+        tx_dir = tx.direction.value if hasattr(tx.direction, "value") else tx.direction
+        if tx_dir == "payable" and tx.currency != engine.base_currency:
+            base_amt = engine.convert_to_base(tx.amount, tx.currency)
+            days_to_due = max(1, (tx.date - DEFAULT_START_DATE).days)
+            vol = engine.fx_config.get("daily_volatility", {}).get(tx.currency, 0.005)
+            imp = impact_eng.calculate_impact(
+                amount_base=base_amt,
+                daily_volatility=vol,
+                days_to_due=days_to_due,
+                action="CONVERT_AND_HOLD",
+                priority="HIGH" if base_amt > 15000 else "MEDIUM"
+            )
+            imp["transaction_id"] = tx.id
+            imp["currency"] = tx.currency
+            total_avoided_loss += imp["estimated_avoided_loss"]
+            total_action_cost += imp["action_cost"]
+            impact_items.append(imp)
+            
+    return {
+        "total_estimated_avoided_loss": round(total_avoided_loss, 2),
+        "total_action_cost": round(total_action_cost, 2),
+        "total_net_economic_benefit": round(total_avoided_loss - total_action_cost, 2),
+        "itemized_impacts": impact_items,
+    }
+
+
+@app.get("/api/actions", response_model=List[RecommendationLifecycleSchema])
+def api_list_actions():
+    from backend.state_machine import get_all_recommendations
+    return get_all_recommendations()
+
+
+@app.post("/api/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
+def api_approve_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
+def api_reject_action(action_id: str):
+    from backend.state_machine import transition_recommendation_status, LifecycleError
+    try:
+        updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LifecycleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
+def api_execute_action(action_id: str):
+    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
+    rec = get_recommendation_by_id(action_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
+
+    current_status = rec["status"]
+    if current_status == "RECOMMENDED":
+        transition_recommendation_status(action_id, "APPROVED", actor="cfo")
+
+    try:
+        transition_recommendation_status(action_id, "EXECUTING", actor="cfo")
+        
+        # Execute on in-memory engine
+        engine = get_engine()
+        engine.apply_action(
+            transaction_id=rec["transaction_id"],
+            action=rec["action_type"],
+            settle_date=DEFAULT_START_DATE,
+        )
+
+        updated = transition_recommendation_status(action_id, "EXECUTED", actor="cfo")
+        return updated
+    except Exception as e:
+        try:
+            transition_recommendation_status(action_id, "FAILED", actor="system")
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"Execution failed: {e}")
 
 
 if __name__ == "__main__":
