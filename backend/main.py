@@ -8,6 +8,7 @@ import json
 from datetime import date
 from typing import Optional
 from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -48,6 +49,11 @@ def get_engine(reload: bool = False) -> CashFlowEngine:
 class ApplyActionRequest(BaseModel):
     transaction_id: str
     action: str
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health")
@@ -219,4 +225,4 @@ def get_decisions(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
