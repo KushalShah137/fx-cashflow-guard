@@ -1,9 +1,13 @@
 import json
+from datetime import date
 from pathlib import Path
-from fastapi import FastAPI, Query
+from typing import Optional
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model import run_monte_carlo_forecast
+from backend.risk_model import run_monte_carlo_forecast, DEFAULT_START_DATE
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -22,9 +26,20 @@ app.add_middleware(
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_transactions.json"
 
+# In-memory singleton instance for live interactive demo state
+_engine_instance: Optional[CashFlowEngine] = None
 
-def get_engine() -> CashFlowEngine:
-    return CashFlowEngine.from_file(DATA_PATH)
+
+def get_engine(reload: bool = False) -> CashFlowEngine:
+    global _engine_instance
+    if _engine_instance is None or reload:
+        _engine_instance = CashFlowEngine.from_file(DATA_PATH)
+    return _engine_instance
+
+
+class ApplyActionRequest(BaseModel):
+    transaction_id: str
+    action: str
 
 
 @app.get("/health")
@@ -50,7 +65,42 @@ def get_forecast(
         days=days,
         target_currency=currency,
         n_simulations=simulations,
+        base_date=DEFAULT_START_DATE,
     )
+
+
+@app.post("/apply-action")
+def apply_action(
+    req: ApplyActionRequest,
+    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
+    days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
+    simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs"),
+):
+    engine = get_engine()
+    try:
+        engine.apply_action(
+            transaction_id=req.transaction_id,
+            action=req.action,
+            settle_date=DEFAULT_START_DATE,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Recompute and return the updated forecast immediately
+    return run_monte_carlo_forecast(
+        engine=engine,
+        days=days,
+        target_currency=currency,
+        n_simulations=simulations,
+        base_date=DEFAULT_START_DATE,
+    )
+
+
+@app.post("/reset")
+def reset_demo():
+    """Reset the engine state back to the original mock dataset."""
+    get_engine(reload=True)
+    return {"status": "reset_successful"}
 
 
 @app.get("/exposures")

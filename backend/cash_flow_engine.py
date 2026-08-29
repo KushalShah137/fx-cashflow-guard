@@ -547,6 +547,63 @@ class CashFlowEngine:
                 return updated
         raise InvalidTransactionError(f"No transaction found with id '{transaction_id}'")
 
+    def apply_action(
+        self,
+        transaction_id: str,
+        action: str,
+        settle_date: Optional[Union[str, date]] = None,
+    ) -> Transaction:
+        """
+        Apply a hedging/settlement action (e.g. 'convert_and_hold' or 'settle_now')
+        to a pending transaction in memory.
+        """
+        action_norm = action.lower().strip()
+        tx = self.get_transaction_by_id(transaction_id)
+        if not tx:
+            raise InvalidTransactionError(f"No transaction found with id '{transaction_id}'")
+
+        idx = next(i for i, t in enumerate(self.transactions) if t.id == transaction_id)
+        target_date = self._resolve_base_date(settle_date) if settle_date else tx.date
+
+        if action_norm == "convert_and_hold":
+            base_amount = self.convert_to_base(tx.amount, tx.currency)
+            updated = Transaction(
+                id=tx.id,
+                date=tx.date,
+                currency=self.base_currency,
+                amount=round(base_amount, 2),
+                direction=tx.direction,
+                description=f"{tx.description} (Hedged)",
+                category=tx.category,
+                status=TransactionStatus.PENDING,
+                demo_action=None,
+                demo_action_label=None,
+            )
+            self.transactions[idx] = updated
+            logger.info("Transaction %s: applied 'convert_and_hold'", transaction_id)
+            return updated
+
+        elif action_norm == "settle_now":
+            base_amount = self.convert_to_base(tx.amount, tx.currency)
+            updated = Transaction(
+                id=tx.id,
+                date=target_date,
+                currency=self.base_currency,
+                amount=round(base_amount, 2),
+                direction=tx.direction,
+                description=f"{tx.description} (Settled Early)",
+                category=tx.category,
+                status=TransactionStatus.SETTLED,
+                demo_action=None,
+                demo_action_label=None,
+            )
+            self.transactions[idx] = updated
+            logger.info("Transaction %s: applied 'settle_now'", transaction_id)
+            return updated
+
+        else:
+            raise ValueError(f"Unknown action '{action}'. Supported: 'convert_and_hold', 'settle_now'")
+
     # ------------------------------------------------------------------ #
     # Threshold / breach reporting
     # ------------------------------------------------------------------ #
