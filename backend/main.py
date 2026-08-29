@@ -10,7 +10,8 @@ from backend.cash_flow_engine import CashFlowEngine
 from backend.risk_model import run_monte_carlo_forecast
 from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
 from backend.risk_classifier import RiskClassifier
-from backend.response_models import RiskClassificationResponse
+from backend.decision_engine import DecisionEngine
+from backend.response_models import RiskClassificationResponse, DecisionResponse
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -177,15 +178,44 @@ def risk_overview(
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
     
-    # 4. Extract exposures
+    # 4. Feed into Decision Engine
+    dec_engine = DecisionEngine()
+    decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+    
+    # 5. Extract exposures
     exposures = [e.to_dict() for e in engine.get_currency_exposures()]
     
     return {
         "baseline_forecast": baseline_list,
         "risk_band": band,
         "risk_classification": classification,
-        "exposures": exposures
+        "exposures": exposures,
+        "decisions": decisions
     }
+
+
+@app.get("/decisions", response_model=DecisionResponse)
+def get_decisions(
+    days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
+    simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+):
+    engine = get_engine()
+    # 1. Retrieve simulated risk band from V2 engine
+    band = get_risk_band_v2(
+        engine=engine,
+        days=days,
+        n_simulations=simulations,
+        seed=42,
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+    )
+    # 2. Run risk classification layer on top
+    classifier = RiskClassifier()
+    classification = classifier.classify(engine, band, days=days)
+    
+    # 3. Feed into Decision Engine
+    dec_engine = DecisionEngine()
+    decisions = dec_engine.generate_decisions(engine, classification, anchor_date=DEFAULT_START_DATE)
+    return decisions
 
 
 

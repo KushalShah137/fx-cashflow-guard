@@ -94,3 +94,99 @@ This API supports the React/Recharts frontend by providing clean separation betw
     *   `risk_band`: Same as `GET /risk-band`'s `risk_band` array.
     *   `risk_classification`: Same as `GET /risk-classification`.
     *   `exposures`: Same as `/exposures`.
+    *   `decisions`: Same as `GET /decisions` response.
+
+---
+
+## 5. GET `/decisions`
+*   **Layer Owner**: Layer 3 (Decision Intelligence Engine)
+*   **Purpose**: Translates exposures and risk classifications into transaction-level hedging and settlement action recommendations.
+*   **Query Parameters**:
+    *   `days` (integer, default=90): The forecast horizon length in days.
+    *   `simulations` (integer, default=2000): Number of Monte Carlo simulation runs.
+*   **Response Schema**:
+    *   `model_version` (string): "decision_engine_v1"
+    *   `decision_policy_version` (string): "v1"
+    *   `overall` (object): Overall risk and intervention summaries.
+        *   `risk_level` (string): LOW/MEDIUM/HIGH
+        *   `risk_score` (integer, 0-100)
+        *   `liquidity_status` (string): SAFE/WATCH/BREACH
+        *   `trajectory` (string): STABLE/WORSENING/IMPROVING
+        *   `requires_intervention` (boolean)
+    *   `decision_kpis` (object): Aggregate counts for the frontend dashboard widgets:
+        *   `total_foreign_exposures` (integer)
+        *   `actions_required` (integer)
+        *   `high_priority_actions` (integer)
+        *   `medium_priority_actions` (integer)
+        *   `monitor_only` (integer)
+    *   `recommendations` (list): Array of action recommendations per pending foreign transaction:
+        *   `transaction_id` (string): Target transaction ID.
+        *   `action` (string): CONVERT_AND_HOLD, SETTLE_NOW, RE_QUOTE, or MONITOR.
+        *   `currency` (string): Foreign currency.
+        *   `amount` (float): Magnitude in foreign currency.
+        *   `direction` (string): payable or receivable.
+        *   `priority` (string): HIGH, MEDIUM, or LOW.
+        *   `risk_level` (string): Risk level at the transaction's due date.
+        *   `risk_score` (integer): Risk score at the transaction's due date.
+        *   `days_to_due` (integer): Days until settlement date.
+        *   `requires_approval` (boolean): Maker-checker flag (defaults to true).
+        *   `reason` (string): Plain-English actionable explanation of why the action was selected.
+        *   `reason_codes` (list of strings): Machine-readable codes for badge rendering.
+        *   `warnings` (list of strings): Risk warnings (e.g. liquidity drains).
+        *   `amount_base` (float): Value converted to USD equivalent.
+        *   `recommended_amount` (float/null): Amount to convert or settle. Null for RE_QUOTE.
+        *   `expected_impact` (object/null): Execution preview hook.
+    *   `decision_context` (object): Context parameters parsed by the future Wise Execution client.
+*   **Example Response**:
+    ```json
+    {
+      "model_version": "decision_engine_v1",
+      "decision_policy_version": "v1",
+      "overall": {
+        "risk_level": "HIGH",
+        "risk_score": 100,
+        "liquidity_status": "BREACH",
+        "trajectory": "WORSENING",
+        "requires_intervention": true
+      },
+      "decision_kpis": {
+        "total_foreign_exposures": 2,
+        "actions_required": 2,
+        "high_priority_actions": 1,
+        "medium_priority_actions": 1,
+        "monitor_only": 0
+      },
+      "recommendations": [
+        {
+          "transaction_id": "txn_010",
+          "action": "CONVERT_AND_HOLD",
+          "currency": "EUR",
+          "amount": 28000.0,
+          "direction": "payable",
+          "priority": "HIGH",
+          "risk_level": "HIGH",
+          "risk_score": 100,
+          "days_to_due": 39,
+          "requires_approval": true,
+          "reason": "Unfunded EUR payable of 28,000.00 has material exposure. Converting and holding protects against adverse currency moves before settlement.",
+          "reason_codes": [
+            "UNFUNDED_PAYABLE",
+            "LIQUIDITY_BUFFER_WARNING"
+          ],
+          "warnings": [
+            "Execution of this transaction's conversion/settlement consumes a material portion of the available base-currency liquidity buffer."
+          ],
+          "amount_base": 30240.0,
+          "recommended_amount": 28000.0,
+          "expected_impact": null
+        }
+      ],
+      "decision_context": {
+        "currencies_at_risk": ["EUR", "GBP"],
+        "exposure_direction": {
+          "EUR": "PAYABLE",
+          "GBP": "RECEIVABLE"
+        }
+      }
+    }
+    ```
