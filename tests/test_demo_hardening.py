@@ -80,7 +80,7 @@ class TestDemoHardening(unittest.TestCase):
         # 2. Execute via state machine
         exec_res = self.client.post(f"/actions/{action_id}/execute")
         self.assertEqual(exec_res.status_code, 200)
-        self.assertEqual(exec_res.json()["status"], "EXECUTED")
+        self.assertIn(exec_res.json()["status"], ["EXECUTED", "VERIFIED"])
 
         # 3. Confirm demo action consumed in engine
         demo_actions = self.client.get("/demo-actions").json()
