@@ -192,6 +192,15 @@ class TestBackendHealthAndEndpoints(unittest.TestCase):
         self.assertEqual(res.headers["content-type"], "image/png")
         self.assertGreater(len(res.content), 10000)
 
+    def test_19_root_landing_page(self):
+        res = self.client.get("/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("text/html", res.headers["content-type"])
+        self.assertIn("<html", res.text.lower())
+        self.assertIn("FX-CASHFLOW GUARD", res.text)
+        self.assertIn("/viz/dashboard", res.text)
+        self.assertIn("/docs", res.text)
+
 
 if __name__ == "__main__":
     unittest.main()
