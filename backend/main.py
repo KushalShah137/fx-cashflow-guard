@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from backend.cash_flow_engine import CashFlowEngine
 from backend.risk_model import run_monte_carlo_forecast, DEFAULT_START_DATE
 from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics
+from backend.risk_classifier import RiskClassifier
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -141,6 +142,27 @@ def risk_band(
 def risk_diagnostics():
     cache_path = DATA_PATH.parent / "fx_historical_cache.json"
     return get_model_diagnostics(cache_path=cache_path)
+
+
+@app.get("/risk-classification")
+def risk_classification(
+    days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
+    simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+):
+    engine = get_engine()
+    # 1. Retrieve simulated risk band from V2 engine
+    band = get_risk_band_v2(
+        engine=engine,
+        days=days,
+        n_simulations=simulations,
+        seed=42,
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+    )
+    # 2. Run risk classification layer on top
+    classifier = RiskClassifier()
+    classification = classifier.classify(engine, band, days=days)
+    return classification
+
 
 
 if __name__ == "__main__":
