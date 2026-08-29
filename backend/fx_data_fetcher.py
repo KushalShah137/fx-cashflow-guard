@@ -4,6 +4,7 @@ FRANKFURTER.DEV FX DATA FETCHER & HISTORICAL CACHE REFRESHER
 --------------------------------------------------------------------------------
 Fetches real daily historical foreign exchange rates from Frankfurter.dev
 (European Central Bank reference data) and maintains data/fx_historical_cache.json.
+Supported Currencies: USD (base), EUR, GBP, INR, CNY, JPY, AUD.
 ================================================================================
 """
 
@@ -29,6 +30,7 @@ logger.setLevel(logging.INFO)
 
 FRANKFURTER_BASE_URL = "https://api.frankfurter.dev/v1"
 DEFAULT_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
+DEFAULT_SYMBOLS = ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"]
 
 
 def fetch_historical_rates(
@@ -43,17 +45,17 @@ def fetch_historical_rates(
 
     Args:
         base: Base currency (default: USD).
-        symbols: Foreign currencies to fetch (default: ["EUR", "GBP"]).
+        symbols: Foreign currencies to fetch (default: ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"]).
         start_date: Start date string (YYYY-MM-DD). Defaults to 2 years ago.
         end_date: End date string (YYYY-MM-DD). Defaults to today.
         timeout: HTTP request timeout in seconds.
 
     Returns:
-        List of dicts: [{"date": "YYYY-MM-DD", "EUR": 0.89952, "GBP": 0.75707}, ...]
+        List of dicts: [{"date": "YYYY-MM-DD", "EUR": 0.85889, "GBP": 0.73624, ...}, ...]
         sorted chronologically ascending.
     """
     if symbols is None:
-        symbols = ["EUR", "GBP"]
+        symbols = list(DEFAULT_SYMBOLS)
     
     symbols_upper = [s.upper().strip() for s in symbols]
     base_upper = base.upper().strip()
@@ -107,7 +109,7 @@ def fetch_latest_spot_rates(
     Fetches the latest spot rate from Frankfurter.dev.
     """
     if symbols is None:
-        symbols = ["EUR", "GBP"]
+        symbols = list(DEFAULT_SYMBOLS)
     
     symbols_upper = [s.upper().strip() for s in symbols]
     base_upper = base.upper().strip()
@@ -134,7 +136,7 @@ def refresh_fx_cache(
     """
     target_path = cache_path or DEFAULT_CACHE_PATH
     if symbols is None:
-        symbols = ["EUR", "GBP"]
+        symbols = list(DEFAULT_SYMBOLS)
 
     try:
         rates = fetch_historical_rates(base=base, symbols=symbols)
@@ -177,14 +179,14 @@ def refresh_fx_cache(
 
 def compute_volatility_metrics(cache_path: Optional[Path] = None) -> Dict[str, Any]:
     """
-    Computes daily log returns and annualized volatility metrics from cache.
+    Computes daily log returns and annualized volatility metrics from cache for all currencies.
     """
     target_path = cache_path or DEFAULT_CACHE_PATH
     with open(target_path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
 
     rates_list = data.get("historical_rates", [])
-    currencies = data.get("currencies", ["EUR", "GBP"])
+    currencies = data.get("currencies", DEFAULT_SYMBOLS)
 
     metrics: Dict[str, Any] = {}
     for ccy in currencies:
@@ -213,7 +215,7 @@ def main():
 
     if args.refresh or len(sys.argv) == 1:
         print("=" * 70)
-        print("FRANKFURTER.DEV FX DATA REFRESH")
+        print("FRANKFURTER.DEV FX DATA REFRESH (6 CURRENCIES)")
         print("=" * 70)
         cache_data = refresh_fx_cache()
         rates = cache_data.get("historical_rates", [])
@@ -232,7 +234,7 @@ def main():
         vols = compute_volatility_metrics()
         for ccy, m in vols.items():
             print(
-                f"  - {ccy}: Latest Spot = {m['latest_spot_rate']:.5f} (1 USD = {m['latest_spot_rate']:.5f} {ccy}), "
+                f"  - {ccy:<4}: Latest Spot = {m['latest_spot_rate']:<10.5f} (1 USD = {m['latest_spot_rate']:.5f} {ccy}), "
                 f"Daily Vol = {m['daily_volatility']:.5f} ({m['daily_volatility']*100:.3f}%), "
                 f"Annualized Vol = {m['annualized_volatility']:.4f} ({m['annualized_volatility']*100:.2f}%)"
             )

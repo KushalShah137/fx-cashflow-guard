@@ -38,6 +38,7 @@ logger.setLevel(logging.INFO)
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
 DEFAULT_START_DATE = date(2026, 9, 1)  # Align with mock transactions date range
+DEFAULT_CURRENCIES: Tuple[str, ...] = ("EUR", "GBP", "INR", "CNY", "JPY", "AUD")
 
 
 # --------------------------------------------------------------------------- #
@@ -45,7 +46,7 @@ DEFAULT_START_DATE = date(2026, 9, 1)  # Align with mock transactions date range
 # --------------------------------------------------------------------------- #
 def load_aligned_returns(
     cache_path: Path = CACHE_PATH,
-    currencies: Tuple[str, ...] = ("EUR", "GBP")
+    currencies: Tuple[str, ...] = DEFAULT_CURRENCIES
 ) -> Tuple[np.ndarray, List[str]]:
     """
     Loads historical exchange rates from cache, filters/aligns by date,
@@ -397,11 +398,13 @@ def get_risk_band(
 
 def get_model_diagnostics(
     cache_path: Path = CACHE_PATH,
-    currencies: Tuple[str, ...] = ("EUR", "GBP")
+    currencies: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
     """
     Diagnostic dashboard endpoint returning matrix calculations for hackathon judges.
     """
+    if currencies is None:
+        currencies = DEFAULT_CURRENCIES
     try:
         return_matrix, ccy_list = load_aligned_returns(cache_path, currencies)
         cov_matrix, corr_matrix = calculate_historical_covariance_and_correlation(return_matrix, ccy_list)

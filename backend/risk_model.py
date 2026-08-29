@@ -36,7 +36,7 @@ def compute_historical_volatilities(cache_path: Path = CACHE_PATH) -> Dict[str, 
         if not rates_list:
             return default_vols
 
-        currencies = data.get("currencies", ["EUR", "GBP"])
+        currencies = data.get("currencies", ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"])
         vols = {}
         for ccy in currencies:
             rates = [r[ccy] for r in rates_list if ccy in r and r[ccy] > 0]

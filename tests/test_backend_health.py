@@ -149,6 +149,29 @@ class TestBackendHealthAndEndpoints(unittest.TestCase):
         self.assertIn("exposures", data)
         self.assertIn("decisions", data)
 
+    def test_15_six_currency_exposures_and_demo_action(self):
+        # 1. Verify 6 currencies in exposures
+        res = self.client.get("/exposures")
+        self.assertEqual(res.status_code, 200)
+        exposures = res.json()
+        currencies = [e["currency"] for e in exposures]
+        for ccy in ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"]:
+            self.assertIn(ccy, currencies)
+
+        # 2. Verify txn_019 in demo actions
+        demo_actions = self.client.get("/demo-actions").json()
+        action_ids = [a["transaction_id"] for a in demo_actions]
+        self.assertIn("txn_019", action_ids)
+
+        # 3. Apply action on txn_019 (INR payable)
+        action_res = self.client.post(
+            "/apply-action",
+            json={"transaction_id": "txn_019", "action": "convert_and_hold"}
+        )
+        self.assertEqual(action_res.status_code, 200)
+        pts = action_res.json()
+        self.assertEqual(len(pts), 90)
+
 
 if __name__ == "__main__":
     unittest.main()

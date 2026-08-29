@@ -5,13 +5,21 @@
     "base_currency": "USD",
     "rates": {
       "USD": 1.0,
-      "EUR": 1.08,
-      "GBP": 1.28
+      "EUR": 0.85889,
+      "GBP": 0.73624,
+      "INR": 95.39,
+      "CNY": 6.7209,
+      "JPY": 159.68,
+      "AUD": 1.3899
     },
     "daily_volatility": {
       "USD": 0.0,
-      "EUR": 0.008,
-      "GBP": 0.009
+      "EUR": 0.00446,
+      "GBP": 0.00447,
+      "INR": 0.00286,
+      "CNY": 0.00168,
+      "JPY": 0.00585,
+      "AUD": 0.00569
     }
   },
   "transactions": [
@@ -178,6 +186,80 @@
       "currency": "USD",
       "amount": 35000.0,
       "description": "Q4 Enterprise License Renewal",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_019",
+      "date": "2026-09-18",
+      "currency": "INR",
+      "amount": -1600000.0,
+      "description": "Bengaluru Offshore Engineering & QA Sprint",
+      "type": "payable",
+      "status": "pending",
+      "demo_action": "convert_and_hold",
+      "demo_action_label": "Convert & Hold INR"
+    },
+    {
+      "id": "txn_020",
+      "date": "2026-09-28",
+      "currency": "INR",
+      "amount": 1150000.0,
+      "description": "Mumbai Fintech Gateway Integration Fee",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_021",
+      "date": "2026-10-06",
+      "currency": "CNY",
+      "amount": -95000.0,
+      "description": "Shenzhen IoT Hardware Prototyping Batch",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_022",
+      "date": "2026-10-21",
+      "currency": "CNY",
+      "amount": 135000.0,
+      "description": "Shanghai Enterprise Cloud Platform License",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_023",
+      "date": "2026-10-12",
+      "currency": "JPY",
+      "amount": 2400000.0,
+      "description": "Tokyo Digital Payment Hub Milestone",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_024",
+      "date": "2026-11-08",
+      "currency": "JPY",
+      "amount": -1600000.0,
+      "description": "Osaka Infrastructure Support & Datacenter",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_025",
+      "date": "2026-09-22",
+      "currency": "AUD",
+      "amount": -18000.0,
+      "description": "Sydney ANZ Regional Marketing & PR",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_026",
+      "date": "2026-11-18",
+      "currency": "AUD",
+      "amount": 25000.0,
+      "description": "Melbourne Commercial Bank Integration",
       "type": "receivable",
       "status": "pending"
     }
