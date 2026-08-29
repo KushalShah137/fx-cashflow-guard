@@ -17,11 +17,18 @@ currency per 1 unit of base currency).
 
 from __future__ import annotations
 
+import sys
 import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+
+# Ensure project root is on sys.path for direct script execution
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import numpy as np
 
 from backend.cash_flow_engine import CashFlowEngine, TransactionStatus, FlowDirection
@@ -108,8 +115,111 @@ def load_aligned_returns(
 
 
 # --------------------------------------------------------------------------- #
-# Step 2: Correlation & Covariance Matrix Calculations
+# Data Alignment Loss Diagnostics (Task 1)
 # --------------------------------------------------------------------------- #
+def get_data_alignment_diagnostics(
+    cache_path: Path = CACHE_PATH,
+    currencies: Tuple[str, ...] = DEFAULT_CURRENCIES
+) -> Dict[str, Any]:
+    """
+    Diagnoses historical FX data alignment retention across all modeled currencies.
+    Reports raw row count, aligned count, dropped rows, and per-currency missing counts.
+    """
+    if not cache_path.exists():
+        return {"error": f"Cache file not found at {cache_path}", "status": "cache_missing"}
+
+    try:
+        with open(cache_path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception as e:
+        return {"error": f"Failed to parse cache: {e}", "status": "parse_error"}
+
+    rates_list = data.get("historical_rates", [])
+    raw_row_count = len(rates_list)
+
+    per_currency_missing_counts = {ccy: 0 for ccy in currencies}
+    aligned_row_count = 0
+
+    for entry in rates_list:
+        dt = entry.get("date")
+        valid_all = bool(dt)
+        for ccy in currencies:
+            val = entry.get(ccy)
+            if val is None or not isinstance(val, (int, float)) or val <= 0:
+                per_currency_missing_counts[ccy] += 1
+                valid_all = False
+        if valid_all:
+            aligned_row_count += 1
+
+    rows_dropped = raw_row_count - aligned_row_count
+    retention_rate = round((aligned_row_count / raw_row_count * 100.0), 2) if raw_row_count > 0 else 0.0
+
+    return {
+        "raw_row_count": raw_row_count,
+        "aligned_row_count": aligned_row_count,
+        "rows_dropped": rows_dropped,
+        "alignment_retention_rate_pct": retention_rate,
+        "per_currency_missing_counts": per_currency_missing_counts,
+        "currencies_analyzed": list(currencies),
+        "start_date": data.get("start_date"),
+        "end_date": data.get("end_date"),
+        "status": "HEALTHY" if rows_dropped == 0 else "PARTIAL_DROPS"
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Step 2: Correlation & Covariance Matrix Calculations & EWMA Volatility (Task 2)
+# --------------------------------------------------------------------------- #
+def compute_ewma_volatility(
+    returns: np.ndarray,
+    lambda_decay: float = 0.94
+) -> float:
+    """
+    Computes the RiskMetrics Exponentially Weighted Moving Average (EWMA) daily volatility.
+    Formula: sigma_t^2 = lambda * sigma_{t-1}^2 + (1 - lambda) * r_{t-1}^2
+    Seeded with the sample variance of the first ~20 observations, iterated forward
+    to obtain the recency-weighted latest volatility estimate.
+    """
+    n = len(returns)
+    if n == 0:
+        return 0.0
+    seed_n = min(20, n)
+    var = float(np.var(returns[:seed_n], ddof=1)) if seed_n > 1 else float(np.var(returns))
+    if var <= 0:
+        var = 1e-8
+
+    for r in returns[seed_n:]:
+        var = lambda_decay * var + (1.0 - lambda_decay) * (float(r) ** 2)
+
+    return float(np.sqrt(max(var, 1e-12)))
+
+
+def rescale_covariance_with_ewma(
+    corr_matrix: np.ndarray,
+    return_matrix: np.ndarray,
+    lambda_decay: float = 0.94
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Rescales covariance matrix using EWMA volatilities:
+    Sigma_ewma = D_ewma @ Corr @ D_ewma
+    where D_ewma = diag(ewma_sigmas).
+    Returns: (cov_ewma, flat_vols, ewma_vols)
+    """
+    K = return_matrix.shape[1]
+    flat_vols = np.std(return_matrix, axis=0, ddof=1)
+    ewma_vols = np.array([
+        compute_ewma_volatility(return_matrix[:, i], lambda_decay=lambda_decay)
+        for i in range(K)
+    ], dtype=np.float64)
+
+    D_ewma = np.diag(ewma_vols)
+    cov_ewma = D_ewma @ corr_matrix @ D_ewma
+
+    # Enforce exact symmetry
+    cov_ewma = (cov_ewma + cov_ewma.T) / 2.0
+    return cov_ewma, flat_vols, ewma_vols
+
+
 def calculate_historical_covariance_and_correlation(
     return_matrix: np.ndarray,
     currencies: List[str]
@@ -199,7 +309,9 @@ def run_monte_carlo_forecast_v2(
     n_simulations: int = 2000,
     base_date: Optional[date] = None,
     seed: Optional[int] = 42,
-    cache_path: Path = CACHE_PATH
+    cache_path: Path = CACHE_PATH,
+    use_ewma_volatility: bool = True,
+    ewma_lambda: float = 0.94,
 ) -> Dict[str, Any]:
     """
     Runs correlated Monte Carlo simulation using Cholesky-decomposed historical return cov.
@@ -246,6 +358,15 @@ def run_monte_carlo_forecast_v2(
     # Load and decompose returns matrix
     return_matrix, currencies_modeled = load_aligned_returns(cache_path, tuple(foreign_currencies))
     cov_matrix, corr_matrix = calculate_historical_covariance_and_correlation(return_matrix, currencies_modeled)
+
+    # Task 2: Rescale covariance matrix with EWMA volatility if enabled
+    if use_ewma_volatility:
+        cov_matrix, _, _ = rescale_covariance_with_ewma(
+            corr_matrix=corr_matrix,
+            return_matrix=return_matrix,
+            lambda_decay=ewma_lambda
+        )
+
     L = stabilized_cholesky(cov_matrix)
 
     # Initialize local RNG for reproducibility
@@ -371,7 +492,8 @@ def get_risk_band(
     days: int = 90,
     n_simulations: int = 2000,
     seed: Optional[int] = 42,
-    cache_path: Path = CACHE_PATH
+    cache_path: Path = CACHE_PATH,
+    use_ewma_volatility: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Primary API function returning the risk band in a Recharts-friendly contract:
@@ -382,7 +504,8 @@ def get_risk_band(
         days=days,
         n_simulations=n_simulations,
         seed=seed,
-        cache_path=cache_path
+        cache_path=cache_path,
+        use_ewma_volatility=use_ewma_volatility,
     )
     risk_band = []
     for p in res["forecast"]:
@@ -399,25 +522,61 @@ def get_risk_band(
 def get_model_diagnostics(
     cache_path: Path = CACHE_PATH,
     currencies: Optional[Tuple[str, ...]] = None,
+    ewma_lambda: float = 0.94,
 ) -> Dict[str, Any]:
     """
-    Diagnostic dashboard endpoint returning matrix calculations for hackathon judges.
+    Diagnostic dashboard endpoint returning matrix calculations and side-by-side volatility metrics for hackathon judges.
     """
     if currencies is None:
         currencies = DEFAULT_CURRENCIES
     try:
         return_matrix, ccy_list = load_aligned_returns(cache_path, currencies)
         cov_matrix, corr_matrix = calculate_historical_covariance_and_correlation(return_matrix, ccy_list)
-        L = stabilized_cholesky(cov_matrix)
+        cov_ewma, flat_vols, ewma_vols = rescale_covariance_with_ewma(corr_matrix, return_matrix, lambda_decay=ewma_lambda)
+        L = stabilized_cholesky(cov_ewma)
+
+        vol_comparison = []
+        flat_daily_map = {}
+        ewma_daily_map = {}
+        flat_annual_map = {}
+        ewma_annual_map = {}
+
+        for idx, ccy in enumerate(ccy_list):
+            f_vol = float(flat_vols[idx])
+            e_vol = float(ewma_vols[idx])
+            f_ann = float(f_vol * np.sqrt(252))
+            e_ann = float(e_vol * np.sqrt(252))
+            diff_pct = float(((e_vol - f_vol) / f_vol) * 100.0) if f_vol > 0 else 0.0
+
+            flat_daily_map[ccy] = round(f_vol, 6)
+            ewma_daily_map[ccy] = round(e_vol, 6)
+            flat_annual_map[ccy] = round(f_ann, 4)
+            ewma_annual_map[ccy] = round(e_ann, 4)
+
+            vol_comparison.append({
+                "currency": ccy,
+                "flat_historical_daily_vol": round(f_vol, 6),
+                "ewma_daily_vol": round(e_vol, 6),
+                "flat_annualized_vol": round(f_ann, 4),
+                "ewma_annualized_vol": round(e_ann, 4),
+                "volatility_difference_pct": round(diff_pct, 2),
+            })
 
         return {
             "model_version": "v2",
-            "method": "correlated_monte_carlo",
+            "method": "correlated_monte_carlo_ewma",
             "currencies_modeled": ccy_list,
             "observations_count": int(return_matrix.shape[0]),
             "correlation_matrix": corr_matrix.tolist(),
-            "covariance_matrix": cov_matrix.tolist(),
+            "covariance_matrix": cov_ewma.tolist(),
+            "flat_covariance_matrix": cov_matrix.tolist(),
             "cholesky_matrix": L.tolist(),
+            "flat_historical_daily_volatility": flat_daily_map,
+            "ewma_daily_volatility": ewma_daily_map,
+            "annualized_flat_volatility": flat_annual_map,
+            "annualized_ewma_volatility": ewma_annual_map,
+            "volatility_comparison": vol_comparison,
+            "ewma_lambda_decay": ewma_lambda,
             "numerical_stabilization_epsilon": 1e-9
         }
     except Exception as e:
@@ -554,6 +713,20 @@ def _run_diagnostics_and_self_tests() -> None:
         print("[PASS] Test 9: Risk engine baseline is perfectly consistent with Layer 1 deterministic forecast.")
     except Exception as e:
         print(f"[FAIL] Baseline consistency check failed: {e}")
+        return
+
+    # 9. TEST 10: Task 2 EWMA Volatility Recency Weighting & Positive Definiteness
+    try:
+        cov_ewma, flat_vols, ewma_vols = rescale_covariance_with_ewma(corr, returns, lambda_decay=0.94)
+        assert not np.allclose(flat_vols, ewma_vols, atol=1e-5), "EWMA volatility should differ from flat historical volatility."
+        L_ewma = stabilized_cholesky(cov_ewma)
+        assert np.allclose(L_ewma @ L_ewma.T, cov_ewma, atol=1e-5), "Cholesky failed on EWMA covariance."
+        print(f"[PASS] Test 10: EWMA recency-weighting verified. Flat vs EWMA diff confirmed and Cholesky decomposition succeeded.")
+        for idx, ccy in enumerate(currencies):
+            diff_pct = ((ewma_vols[idx] - flat_vols[idx]) / flat_vols[idx]) * 100.0
+            print(f"       {ccy}: Flat Vol = {flat_vols[idx]:.6f} -> EWMA Vol = {ewma_vols[idx]:.6f} (Diff: {diff_pct:+.2f}%)")
+    except Exception as e:
+        print(f"[FAIL] EWMA volatility test failed: {e}")
         return
 
     print("=" * 70)

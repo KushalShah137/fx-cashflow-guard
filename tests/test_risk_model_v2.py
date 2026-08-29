@@ -108,9 +108,28 @@ class TestRiskModelV2(unittest.TestCase):
     def test_model_diagnostics(self):
         diag = get_model_diagnostics()
         self.assertEqual(diag["model_version"], "v2")
-        self.assertEqual(diag["method"], "correlated_monte_carlo")
+        self.assertIn("correlated_monte_carlo", diag["method"])
         self.assertIn("currencies_modeled", diag)
         self.assertIn("correlation_matrix", diag)
+        self.assertIn("volatility_comparison", diag)
+        self.assertIn("ewma_daily_volatility", diag)
+        self.assertIn("flat_historical_daily_volatility", diag)
+
+    def test_data_alignment_diagnostics(self):
+        from backend.risk_model_v2 import get_data_alignment_diagnostics
+        data_diag = get_data_alignment_diagnostics()
+        self.assertEqual(data_diag["status"], "HEALTHY")
+        self.assertGreater(data_diag["raw_row_count"], 0)
+        self.assertEqual(data_diag["rows_dropped"], 0)
+        self.assertEqual(data_diag["alignment_retention_rate_pct"], 100.0)
+
+    def test_ewma_volatility_calculation(self):
+        from backend.risk_model_v2 import compute_ewma_volatility, load_aligned_returns, CACHE_PATH
+        returns, currencies = load_aligned_returns(CACHE_PATH, ("EUR", "GBP"))
+        ewma_eur = compute_ewma_volatility(returns[:, 0], lambda_decay=0.94)
+        flat_eur = float(np.std(returns[:, 0], ddof=1))
+        self.assertGreater(ewma_eur, 0.0)
+        self.assertNotEqual(ewma_eur, flat_eur)
 
 
 if __name__ == "__main__":

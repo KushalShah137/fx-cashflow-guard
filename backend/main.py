@@ -13,7 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
+from backend.risk_model_v2 import (
+    get_risk_band as get_risk_band_v2,
+    get_model_diagnostics,
+    get_data_alignment_diagnostics,
+    DEFAULT_START_DATE
+)
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
 from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
@@ -635,6 +640,13 @@ def risk_band(
 def risk_diagnostics():
     cache_path = DATA_PATH.parent / "fx_historical_cache.json"
     return get_model_diagnostics(cache_path=cache_path)
+
+
+@app.get("/data-diagnostics")
+def data_diagnostics():
+    """Diagnoses raw vs aligned historical FX data rows and missing counts per currency."""
+    cache_path = DATA_PATH.parent / "fx_historical_cache.json"
+    return get_data_alignment_diagnostics(cache_path=cache_path)
 
 
 @app.get("/risk-classification", response_model=RiskClassificationResponse)
