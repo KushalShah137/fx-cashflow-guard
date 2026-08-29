@@ -15,7 +15,6 @@ import {
   fetchAuditLogs,
 } from "@/lib/api"
 import { LandingHero } from "@/components/landing/LandingHero"
-import { ArchitectureLayers } from "@/components/landing/ArchitectureLayers"
 import { TerminalLoginModal } from "@/components/landing/TerminalLoginModal"
 import { ContainerScroll } from "@/components/ui/container-scroll-animation"
 import { RiskBandChart } from "@/components/dashboard/RiskBandChart"
@@ -121,89 +120,60 @@ export function App() {
   return (
     <div className="min-h-screen bg-[#F9F8F5] text-[#18181B] flex flex-col font-mono selection:bg-[#18181B] selection:text-[#F9F8F5]">
       {/* Top Editorial Financial Terminal Navigation Bar */}
-      <header className="sticky top-0 z-40 bg-[#FAF9F5]/95 backdrop-blur-md border-b border-[#E4E2D9]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
-          {/* Brand Logo & Telemetry Status */}
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setCurrentPage("landing")}
-              className="flex items-center gap-2 text-left group focus:outline-none"
-            >
-              <div className="w-5 h-5 bg-[#18181B] text-[#FAF9F5] flex items-center justify-center font-bold text-xs">
-                FX
-              </div>
-              <span className="font-display font-bold text-base tracking-tight text-[#18181B]">
-                FX // FORECASTER
-              </span>
-            </button>
-
-            <span className="hidden md:inline-flex items-center gap-1.5 px-2 py-0.5 bg-[#F4F3EE] border border-[#E4E2D9] text-[10px] text-[#047857] font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#047857] animate-pulse" />
-              WISE SANDBOX ONLINE
-            </span>
-          </div>
-
-          {/* Navigation Views Switcher */}
-          <nav className="flex items-center border border-[#18181B] bg-[#FAF9F5] p-0.5 text-xs">
-            <button
-              onClick={() => setCurrentPage("landing")}
-              className={`px-3 py-1 transition-colors ${
-                currentPage === "landing"
-                  ? "bg-[#18181B] text-[#FAF9F5] font-bold"
-                  : "text-[#71717A] hover:text-[#18181B]"
-              }`}
-            >
-              OVERVIEW (/)
-            </button>
-            <button
-              onClick={() => setCurrentPage("dashboard")}
-              className={`px-3 py-1 transition-colors ${
-                currentPage === "dashboard"
-                  ? "bg-[#18181B] text-[#FAF9F5] font-bold"
-                  : "text-[#71717A] hover:text-[#18181B]"
-              }`}
-            >
-              DASHBOARD (/dashboard)
-            </button>
-            <button
-              onClick={() => setCurrentPage("wise")}
-              className={`px-3 py-1 transition-colors ${
-                currentPage === "wise"
-                  ? "bg-[#18181B] text-[#FAF9F5] font-bold"
-                  : "text-[#71717A] hover:text-[#18181B]"
-              }`}
-            >
-              WISE SANDBOX (/wise)
-            </button>
-          </nav>
-
-          {/* User / Node Status Button */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsLoginModalOpen(true)}
-              className="px-2.5 py-1 text-xs border border-[#E4E2D9] bg-[#F4F3EE] hover:border-[#18181B] text-[#18181B] flex items-center gap-1.5 transition-colors"
-            >
-              <Terminal className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">NODE_01</span>
-            </button>
-          </div>
+      <header className="nav">
+        <div className="nav-left">
+          <span className="nav-badge">FX</span>
+          <span>FX // FORECASTER</span>
         </div>
+        <div className="nav-center">
+          <button
+            onClick={() => setCurrentPage("landing")}
+            className={`nav-tab ${currentPage === "landing" ? "active" : ""}`}
+          >
+            Login (/)
+          </button>
+          <button
+            onClick={() => setCurrentPage("dashboard")}
+            className={`nav-tab ${currentPage === "dashboard" ? "active" : ""}`}
+          >
+            DASHBOARD (/dashboard)
+          </button>
+          <button
+            onClick={() => setCurrentPage("wise")}
+            className={`nav-tab ${currentPage === "wise" ? "active" : ""}`}
+          >
+            WISE SANDBOX (/wise)
+          </button>
+        </div>
+        <div className="avatar" onClick={() => setIsLoginModalOpen(true)}>KL</div>
       </header>
+
+      <div className="ticker">
+        <div className="ticker-left">
+          <span><span className="dot"></span>MARKET TELEMETRY ACTIVE</span>
+          <span className="divider">|</span>
+          <span>USD/INR <span className="up">87.41 (+0.14%)</span></span>
+          <span>EUR/INR <span className="down">93.00 (−0.08%)</span></span>
+          <span>GBP/INR <span className="up">110.20 (+0.22%)</span></span>
+        </div>
+        <div className="ticker-right">
+          <span>BASE CURRENCY: INR (₹)</span>
+          <span>LATENCY: 14MS</span>
+        </div>
+      </div>
 
       {/* Main Content Area */}
       <main className="flex-1">
         {/* PAGE 1: LANDING PAGE */}
         {currentPage === "landing" && (
-          <div>
-            <LandingHero
-              onOpenLogin={() => setIsLoginModalOpen(true)}
-              onNavigateDashboard={() => setCurrentPage("dashboard")}
-            />
-            <ArchitectureLayers
-              onNavigateDashboard={() => setCurrentPage("dashboard")}
-              onNavigateWise={() => setCurrentPage("wise")}
-            />
-          </div>
+          <LandingHero
+            onOpenLogin={() => setIsLoginModalOpen(true)}
+            onNavigateDashboard={() => setCurrentPage("dashboard")}
+            onLoginSuccess={() => {
+              setIsLoginModalOpen(false)
+              setCurrentPage("dashboard")
+            }}
+          />
         )}
 
         {/* PAGE 2: DASHBOARD */}
