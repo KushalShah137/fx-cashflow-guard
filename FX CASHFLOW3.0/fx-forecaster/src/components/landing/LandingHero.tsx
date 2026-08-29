@@ -51,7 +51,7 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
           <form onSubmit={handleLogin}>
             <label className="signin-label">Corporate Email</label>
             <div className="field">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M4 4h16v16H4z" opacity="0"/>
                 <path d="M22 6l-10 7L2 6"/>
                 <path d="M2 6h20v12H2z"/>
@@ -66,7 +66,7 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
 
             <label className="signin-label">Master Key / Password</label>
             <div className="field">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="4" y="10" width="16" height="10" rx="2"/>
                 <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
               </svg>

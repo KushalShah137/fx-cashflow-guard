@@ -21,12 +21,18 @@ export function ScrollCoinCanvas() {
     const container = containerRef.current;
     if (!canvas || !container) return;
 
-    let width = container.clientWidth;
-    let height = container.clientHeight;
+    let width = container.clientWidth || 300;
+    let height = container.clientHeight || 300;
 
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(width, height);
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(width, height);
+    } catch (e) {
+      console.warn("WebGL not supported or disabled:", e);
+      return;
+    }
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 100);
