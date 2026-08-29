@@ -7,9 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model import run_monte_carlo_forecast, DEFAULT_START_DATE
-from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics
+from backend.risk_model import run_monte_carlo_forecast
+from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_diagnostics, DEFAULT_START_DATE
 from backend.risk_classifier import RiskClassifier
+from backend.response_models import RiskClassificationResponse
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -57,26 +58,21 @@ def get_transactions():
 
 @app.get("/forecast")
 def get_forecast(
-    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
+    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP) (compatibility parameter, ignored in V2 baseline)"),
     days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
-    simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs"),
+    simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs (ignored in V2 baseline)"),
 ):
     engine = get_engine()
-    return run_monte_carlo_forecast(
-        engine=engine,
-        days=days,
-        target_currency=currency,
-        n_simulations=simulations,
-        base_date=DEFAULT_START_DATE,
-    )
+    pts = engine.get_forecast(days=days, base_date=DEFAULT_START_DATE)
+    return [p.to_dict() for p in pts]
 
 
 @app.post("/apply-action")
 def apply_action(
     req: ApplyActionRequest,
-    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP)"),
+    currency: str = Query("USD", description="Target base currency (USD, EUR, GBP) (ignored)"),
     days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
-    simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs"),
+    simulations: int = Query(1000, ge=100, le=10000, description="Number of Monte Carlo simulation runs (ignored)"),
 ):
     engine = get_engine()
     try:
@@ -88,14 +84,8 @@ def apply_action(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Recompute and return the updated forecast immediately
-    return run_monte_carlo_forecast(
-        engine=engine,
-        days=days,
-        target_currency=currency,
-        n_simulations=simulations,
-        base_date=DEFAULT_START_DATE,
-    )
+    pts = engine.get_forecast(days=days, base_date=DEFAULT_START_DATE)
+    return [p.to_dict() for p in pts]
 
 
 @app.post("/reset")
@@ -144,7 +134,7 @@ def risk_diagnostics():
     return get_model_diagnostics(cache_path=cache_path)
 
 
-@app.get("/risk-classification")
+@app.get("/risk-classification", response_model=RiskClassificationResponse)
 def risk_classification(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
@@ -162,6 +152,40 @@ def risk_classification(
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
     return classification
+
+
+@app.get("/risk-overview")
+def risk_overview(
+    days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
+    simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+):
+    engine = get_engine()
+    # 1. Compute deterministic Layer 1 baseline forecast
+    pts = engine.get_forecast(days=days, base_date=DEFAULT_START_DATE)
+    baseline_list = [p.to_dict() for p in pts]
+    
+    # 2. Retrieve simulated risk band from V2 engine
+    band = get_risk_band_v2(
+        engine=engine,
+        days=days,
+        n_simulations=simulations,
+        seed=42,
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+    )
+    
+    # 3. Run classification
+    classifier = RiskClassifier()
+    classification = classifier.classify(engine, band, days=days)
+    
+    # 4. Extract exposures
+    exposures = [e.to_dict() for e in engine.get_currency_exposures()]
+    
+    return {
+        "baseline_forecast": baseline_list,
+        "risk_band": band,
+        "risk_classification": classification,
+        "exposures": exposures
+    }
 
 
 

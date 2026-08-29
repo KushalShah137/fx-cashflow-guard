@@ -59,35 +59,35 @@ class TestRiskClassifier(unittest.TestCase):
         res = self.classifier.classify(self.engine, band, days=90)
         
         # Day 30 is at index 29: baseline should match, date should match
-        self.assertEqual(res["horizons"]["30"]["date"], "2026-09-30")
-        self.assertEqual(res["horizons"]["60"]["date"], "2026-10-30")  # i=59: index offset mapping
-        self.assertEqual(res["horizons"]["30"]["baseline"], 50000.0)
+        self.assertEqual(res["horizons"]["30"]["point_in_time"]["date"], "2026-09-30")
+        self.assertEqual(res["horizons"]["60"]["point_in_time"]["date"], "2026-10-30")  # index 59
+        self.assertEqual(res["horizons"]["30"]["point_in_time"]["baseline"], 50000.0)
 
     def test_non_arbitrary_horizon_risk_levels(self):
         # Case A: Low risk everywhere
         low_band = self._generate_mock_band(90, downside_growth=0.0)
         res_low = self.classifier.classify(self.engine, low_band, days=90)
-        self.assertEqual(res_low["horizons"]["30"]["overall_risk_level"], "LOW")
-        self.assertEqual(res_low["horizons"]["60"]["overall_risk_level"], "LOW")
-        self.assertEqual(res_low["horizons"]["90"]["overall_risk_level"], "LOW")
+        self.assertEqual(res_low["horizons"]["30"]["classification"]["overall_risk_level"], "LOW")
+        self.assertEqual(res_low["horizons"]["60"]["classification"]["overall_risk_level"], "LOW")
+        self.assertEqual(res_low["horizons"]["90"]["classification"]["overall_risk_level"], "LOW")
 
         # Case B: High risk everywhere
         high_band = self._generate_mock_band(90, downside_growth=1000.0)
         res_high = self.classifier.classify(self.engine, high_band, days=90)
-        self.assertEqual(res_high["horizons"]["30"]["overall_risk_level"], "HIGH")
-        self.assertEqual(res_high["horizons"]["60"]["overall_risk_level"], "HIGH")
-        self.assertEqual(res_high["horizons"]["90"]["overall_risk_level"], "HIGH")
+        self.assertEqual(res_high["horizons"]["30"]["classification"]["overall_risk_level"], "HIGH")
+        self.assertEqual(res_high["horizons"]["60"]["classification"]["overall_risk_level"], "HIGH")
+        self.assertEqual(res_high["horizons"]["90"]["classification"]["overall_risk_level"], "HIGH")
 
     def test_liquidity_breach(self):
-        # Set a massive downside to force P5 below danger_threshold (20,000)
-        # Baseline = 50,000. On day 90, spread is 40,000. P5 = 10,000 (< 20,000)
+        # Set a downside that forces P5 below danger_threshold (20,000)
+        # Baseline = 50,000. spread grows at 450 per day, so day 90 spread is 450 * 90 = 40500. p5 = 9500 (< 20000)
         breach_band = self._generate_mock_band(90, downside_growth=450.0)
         res = self.classifier.classify(self.engine, breach_band, days=90)
         
         snapshot_90 = res["horizons"]["90"]
-        self.assertEqual(snapshot_90["liquidity_status"], "BREACH")
-        self.assertEqual(snapshot_90["overall_risk_level"], "HIGH")
-        self.assertGreaterEqual(snapshot_90["risk_score"], 67)
+        self.assertEqual(snapshot_90["classification"]["liquidity_status"], "BREACH")
+        self.assertEqual(snapshot_90["classification"]["overall_risk_level"], "HIGH")
+        self.assertGreaterEqual(snapshot_90["classification"]["risk_score"], 67)
 
     def test_no_fx_exposure(self):
         usd_only_engine = CashFlowEngine(
@@ -100,16 +100,14 @@ class TestRiskClassifier(unittest.TestCase):
         res = self.classifier.classify(usd_only_engine, flat_band, days=90)
         
         for h in ["30", "60", "90"]:
-            self.assertEqual(res["horizons"][h]["fx_risk_level"], "LOW")
-            self.assertEqual(res["horizons"][h]["risk_score"], 0)
+            self.assertEqual(res["horizons"][h]["classification"]["fx_risk_level"], "LOW")
+            self.assertEqual(res["horizons"][h]["classification"]["risk_score"], 0)
 
     def test_worsening_trajectory(self):
-        # Downside spreads grow rapidly over time: 30D spread is 300, 90D spread is 9000
-        # This will escalate scores across horizons
+        # Non-linear spread growth to force WORSENING trajectory
         escalating_band = []
         base_val = 50000.0
         for i in range(90):
-            # Non-linear spread growth to force LOW -> MEDIUM -> HIGH
             if i < 30:
                 spread = 10.0
             elif i < 60:
@@ -124,10 +122,9 @@ class TestRiskClassifier(unittest.TestCase):
                 "p95": base_val + spread
             })
         res = self.classifier.classify(self.engine, escalating_band, days=90)
-        self.assertEqual(res["trajectory"], "WORSENING")
+        self.assertEqual(res["risk_trajectory"], "WORSENING")
 
     def test_improving_trajectory(self):
-        # Construct an artificial reverse scenario where risk falls (e.g. maturing hedge)
         decreasing_band = []
         base_val = 50000.0
         for i in range(90):
@@ -145,12 +142,12 @@ class TestRiskClassifier(unittest.TestCase):
                 "p95": base_val + spread
             })
         res = self.classifier.classify(self.engine, decreasing_band, days=90)
-        self.assertEqual(res["trajectory"], "IMPROVING")
+        self.assertEqual(res["risk_trajectory"], "IMPROVING")
 
     def test_stable_trajectory(self):
         stable_band = self._generate_mock_band(90, downside_growth=0.0)
         res = self.classifier.classify(self.engine, stable_band, days=90)
-        self.assertEqual(res["trajectory"], "STABLE")
+        self.assertEqual(res["risk_trajectory"], "STABLE")
 
     def test_mathematical_consistency(self):
         band = self._generate_mock_band(90, downside_growth=50.0)
@@ -158,25 +155,25 @@ class TestRiskClassifier(unittest.TestCase):
         
         for h in ["30", "60", "90"]:
             snapshot = res["horizons"][h]
-            self.assertGreaterEqual(snapshot["downside_amount"], 0.0)
-            self.assertGreaterEqual(snapshot["band_width"], 0.0)
-            expected_width = round(snapshot["p95"] - snapshot["p5"], 2)
-            self.assertAlmostEqual(snapshot["band_width"], expected_width, places=2)
+            # PIT checks
+            pit = snapshot["point_in_time"]
+            self.assertGreaterEqual(pit["downside_amount"], 0.0)
+            self.assertGreaterEqual(pit["band_width"], 0.0)
+            expected_width = round(pit["p95"] - pit["p5"], 2)
+            self.assertAlmostEqual(pit["band_width"], expected_width, places=2)
 
     def test_risk_score_bounds(self):
-        # Test extreme boundaries to ensure clamp at 0 and 100
         low_band = self._generate_mock_band(90, downside_growth=0.0)
         res_low = self.classifier.classify(self.engine, low_band, days=90)
         for h in ["30", "60", "90"]:
-            self.assertTrue(0 <= res_low["horizons"][h]["risk_score"] <= 100)
+            self.assertTrue(0 <= res_low["horizons"][h]["classification"]["risk_score"] <= 100)
 
         extreme_high_band = self._generate_mock_band(90, downside_growth=80000.0)
         res_high = self.classifier.classify(self.engine, extreme_high_band, days=90)
         for h in ["30", "60", "90"]:
-            self.assertTrue(0 <= res_high["horizons"][h]["risk_score"] <= 100)
+            self.assertTrue(0 <= res_high["horizons"][h]["classification"]["risk_score"] <= 100)
 
     def test_no_nan_inf(self):
-        # Validate that baseline = 0 or negative baseline doesn't crash calculations
         zero_baseline_band = [
             {"date": f"2026-09-{i+1:02d}", "baseline": 0.0, "p5": -100.0, "p50": 0.0, "p95": 100.0}
             for i in range(90)
@@ -184,15 +181,78 @@ class TestRiskClassifier(unittest.TestCase):
         res = self.classifier.classify(self.engine, zero_baseline_band, days=90)
         for h in ["30", "60", "90"]:
             snapshot = res["horizons"][h]
-            self.assertTrue(np.isfinite(snapshot["downside_pct"]))
-            self.assertTrue(np.isfinite(snapshot["risk_score"]))
+            self.assertTrue(np.isfinite(snapshot["point_in_time"]["downside_pct"]))
+            self.assertTrue(np.isfinite(snapshot["classification"]["risk_score"]))
 
     def test_json_serializability(self):
         band = self._generate_mock_band(90, downside_growth=50.0)
         res = self.classifier.classify(self.engine, band, days=90)
-        # Should not raise any TypeError
         raw_json = json.dumps(res)
         self.assertIsInstance(raw_json, str)
+
+    def test_through_horizon_minimums(self):
+        # A band where balance starts at 50k, drops to 25k on day 15, then recovers to 50k on day 30, and drops to 15k on day 50.
+        band = []
+        base_val = 50000.0
+        for i in range(90):
+            day_num = i + 1
+            if day_num == 15:
+                p5 = 25000.0
+            elif day_num == 50:
+                p5 = 15000.0
+            else:
+                p5 = 48000.0
+            band.append({
+                "date": f"2026-09-{day_num:02d}" if day_num <= 30 else f"2026-10-{day_num-30:02d}",
+                "baseline": base_val,
+                "p5": p5,
+                "p50": base_val,
+                "p95": base_val + 2000.0
+            })
+        
+        res = self.classifier.classify(self.engine, band, days=90)
+        # Test B: 30D minimum P5 is 25000.0
+        self.assertEqual(res["horizons"]["30"]["through_horizon"]["minimum_p5"], 25000.0)
+        # Test C: 60D minimum P5 is 15000.0
+        self.assertEqual(res["horizons"]["60"]["through_horizon"]["minimum_p5"], 15000.0)
+        # Test D: 90D minimum P5 is 15000.0
+        self.assertEqual(res["horizons"]["90"]["through_horizon"]["minimum_p5"], 15000.0)
+
+    def test_mid_horizon_breach_recovery(self):
+        # Test E / Mid-horizon breach followed by recovery
+        # Day 1-30: Safe (danger threshold is 20000.0). p5 is 30000.
+        # Day 40: Breach (p5 is 10000).
+        # Day 60: Recovered (p5 is 35000).
+        # Day 90: Recovered (p5 is 40000).
+        band = []
+        base_val = 50000.0
+        for i in range(90):
+            day_num = i + 1
+            if day_num <= 30:
+                p5 = 30000.0
+            elif 35 <= day_num <= 50:
+                p5 = 10000.0  # Breach!
+            else:
+                p5 = 35000.0  # Recovered!
+            band.append({
+                "date": f"2026-09-{day_num:02d}" if day_num <= 30 else f"2026-10-{day_num-30:02d}",
+                "baseline": base_val,
+                "p5": p5,
+                "p50": base_val,
+                "p95": base_val + 2000.0
+            })
+        
+        res = self.classifier.classify(self.engine, band, days=90)
+        # 30D should be SAFE
+        self.assertEqual(res["horizons"]["30"]["classification"]["liquidity_status"], "SAFE")
+        # 60D should be BREACH because the breach happened in day 35-50
+        self.assertEqual(res["horizons"]["60"]["classification"]["liquidity_status"], "BREACH")
+        # 90D should also be BREACH because the breach happened in day 35-50, even though day 90 itself is recovered (p5 = 35000)
+        self.assertEqual(res["horizons"]["90"]["classification"]["liquidity_status"], "BREACH")
+        
+        # Verify first breach date is populated
+        self.assertIsNotNone(res["horizons"]["90"]["through_horizon"]["first_breach_date"])
+        self.assertEqual(res["horizons"]["90"]["through_horizon"]["days_to_first_breach"], 35)
 
 
 if __name__ == "__main__":

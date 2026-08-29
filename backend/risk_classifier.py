@@ -5,13 +5,15 @@ RISK CLASSIFICATION LAYER (Layer 2.5)
 Responsibilities of this module:
     1. Consume the risk band output from Risk Model V2 (P5/P50/P95/baseline).
     2. Consume context from CashFlowEngine (exposures, danger threshold).
-    3. Perform multi-horizon snapshots for Day 30, 60, and 90.
-    4. Compute key metrics: downside amount/pct, band width, liquidity buffer.
-    5. Determine risk levels (LOW, MEDIUM, HIGH) and liquidity status
+    3. Perform through-horizon and point-in-time multi-horizon snapshots for Days 30, 60, and 90.
+    4. Compute key point-in-time metrics: baseline, P5, P50, P95, band width, downside amount/pct.
+    5. Compute through-horizon metrics: minimum P5/P50, maximum band width, maximum downside amount/pct,
+       minimum liquidity buffer, first breach date, breach count, days to first breach, risk persistence.
+    6. Determine risk levels (LOW, MEDIUM, HIGH) and liquidity status
        (SAFE, WATCH, BREACH) deterministically based on configurable policy.
-    6. Formulate clear business explanations based on metrics.
-    7. Classify the overall risk trajectory (STABLE, WORSENING, IMPROVING).
-    8. Expose a decision_context block to support future Decision Engines.
+    7. Formulate clear business explanations based on through-horizon metrics.
+    8. Classify the overall risk trajectory (STABLE, WORSENING, IMPROVING) and risk pressure.
+    9. Expose a decision_context block to support future Decision Engines.
 ================================================================================
 """
 
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field, asdict
 from datetime import date
 from typing import Dict, Any, List, Optional, Union
@@ -58,24 +61,19 @@ class RiskClassificationConfig:
 @dataclass
 class HorizonSnapshot:
     horizon_days: int
-    date: str
-    baseline: float
-    p5: float
-    p50: float
-    p95: float
-    downside_amount: float
-    downside_pct: float
-    band_width: float
-    fx_risk_level: str
-    liquidity_status: str
-    overall_risk_level: str
-    risk_score: int
-    liquidity_buffer: float
-    liquidity_buffer_pct: float
+    point_in_time: Dict[str, Any]
+    through_horizon: Dict[str, Any]
+    classification: Dict[str, Any]
     explanation: str
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {
+            "horizon_days": self.horizon_days,
+            "point_in_time": self.point_in_time,
+            "through_horizon": self.through_horizon,
+            "classification": self.classification,
+            "explanation": self.explanation
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -122,36 +120,65 @@ class RiskClassifier:
             # Map day to array index (e.g. Day 30 is at index 29)
             idx = h - 1
             if idx < len(risk_band):
-                day_data = risk_band[idx]
-                snapshot = self._classify_horizon(h, day_data, danger_threshold)
+                # Horizon slice for through-horizon metrics (from Day 1 to Day H inclusive)
+                horizon_slice = risk_band[0:h]
+                pit_data = risk_band[idx]
+                snapshot = self._classify_horizon(h, pit_data, horizon_slice, danger_threshold)
                 horizons_snapshots[str(h)] = snapshot.to_dict()
+                
                 horizon_comparison_list.append({
                     "horizon": f"{h}D",
-                    "risk_score": snapshot.risk_score,
-                    "risk_level": snapshot.overall_risk_level,
-                    "downside_amount": snapshot.downside_amount,
-                    "band_width": snapshot.band_width,
-                    "liquidity_buffer": snapshot.liquidity_buffer
+                    "risk_score": snapshot.classification["risk_score"],
+                    "risk_level": snapshot.classification["overall_risk_level"],
+                    "fx_risk_level": snapshot.classification["fx_risk_level"],
+                    "liquidity_status": snapshot.classification["liquidity_status"],
+                    "minimum_p5": snapshot.through_horizon["minimum_p5"],
+                    "minimum_liquidity_buffer": snapshot.through_horizon["minimum_liquidity_buffer"],
+                    "maximum_downside": snapshot.through_horizon["maximum_downside"],
+                    "maximum_downside_pct": snapshot.through_horizon["maximum_downside_pct"],
+                    "breach_count": snapshot.through_horizon["breach_count"]
                 })
 
-        # Calculate Overall Risk Level and Trajectory
+        # Calculate Overall Risk Level, Score, Trajectory, and Pressure
         overall_risk_level = "LOW"
         overall_risk_score = 0
         trajectory = "STABLE"
+        risk_pressure = "STABLE"
 
-        # Trajectory check based on continuous risk scores
-        score_30 = horizons_snapshots["30"]["risk_score"] if "30" in horizons_snapshots else 0
-        score_60 = horizons_snapshots["60"]["risk_score"] if "60" in horizons_snapshots else 0
-        score_90 = horizons_snapshots["90"]["risk_score"] if "90" in horizons_snapshots else 0
+        # Trajectory checks based on point-in-time risk scores (evolution of terminal risk state)
+        pit_score_30 = self._calculate_pit_score(risk_band[29], danger_threshold) if len(risk_band) >= 30 else 0
+        pit_score_60 = self._calculate_pit_score(risk_band[59], danger_threshold) if len(risk_band) >= 60 else 0
+        pit_score_90 = self._calculate_pit_score(risk_band[89], danger_threshold) if len(risk_band) >= 90 else 0
 
         # Trajectory evaluation
-        diff_score = score_90 - score_30
-        if diff_score > 5:
+        diff_score = pit_score_90 - pit_score_30
+        breach_count_30 = horizons_snapshots.get("30", {}).get("through_horizon", {}).get("breach_count", 0)
+        breach_count_90 = horizons_snapshots.get("90", {}).get("through_horizon", {}).get("breach_count", 0)
+        breach_emergence = breach_count_90 > breach_count_30
+
+        if diff_score > 5 or breach_emergence:
             trajectory = "WORSENING"
         elif diff_score < -5:
             trajectory = "IMPROVING"
         else:
             trajectory = "STABLE"
+
+        # Risk pressure evaluation (trend in terminal band width)
+        if "30" in horizons_snapshots and "90" in horizons_snapshots:
+            width_30 = horizons_snapshots["30"]["point_in_time"]["band_width"]
+            width_90 = horizons_snapshots["90"]["point_in_time"]["band_width"]
+            diff_width = width_90 - width_30
+            pct_change = diff_width / max(width_30, 1.0)
+            if pct_change > 0.05:
+                risk_pressure = "INCREASING"
+            elif pct_change < -0.05:
+                risk_pressure = "DECREASING"
+            else:
+                risk_pressure = "STABLE"
+
+        score_30 = horizons_snapshots["30"]["classification"]["risk_score"] if "30" in horizons_snapshots else 0
+        score_60 = horizons_snapshots["60"]["classification"]["risk_score"] if "60" in horizons_snapshots else 0
+        score_90 = horizons_snapshots["90"]["classification"]["risk_score"] if "90" in horizons_snapshots else 0
 
         # Overall risk level is based on the maximum risk seen at the furthest horizons
         overall_risk_score = max(score_30, score_60, score_90)
@@ -164,28 +191,71 @@ class RiskClassifier:
 
         # Exposure context extraction from engine
         raw_exposures = engine.get_currency_exposures()
-        currencies_at_risk = [e.currency for e in raw_exposures]
-        exposure_direction = {e.currency: e.direction.value.upper() for e in raw_exposures}
+        exposures_formatted = []
+        currencies_at_risk = []
+        exposure_direction = {}
+        
+        for e in raw_exposures:
+            currencies_at_risk.append(e.currency)
+            exposure_direction[e.currency] = e.direction.value.upper()
+            exposures_formatted.append(e.to_dict())
 
         # Build Future Decision Context
-        requires_intervention = (overall_risk_level == "HIGH" or any(
-            horizons_snapshots[h]["liquidity_status"] == "BREACH"
+        # Treat any through-horizon liquidity breach as requiring intervention
+        any_breach = any(
+            horizons_snapshots[h]["classification"]["liquidity_status"] == "BREACH"
             for h in horizons_snapshots
-        ))
+        )
+        requires_intervention = (overall_risk_level == "HIGH" or any_breach)
 
         decision_context = {
             "risk_level": overall_risk_level,
             "risk_score": overall_risk_score,
             "horizon_days": days,
-            "liquidity_status": horizons_snapshots.get(str(days), {}).get("liquidity_status", "SAFE"),
+            "liquidity_status": horizons_snapshots.get(str(days), {}).get("classification", {}).get("liquidity_status", "SAFE"),
             "currencies_at_risk": currencies_at_risk,
             "exposure_direction": exposure_direction,
             "requires_intervention": requires_intervention,
+            "priority": "HIGH" if requires_intervention else "LOW",
             "candidate_actions": []  # Open door for future Layer 3 Decision Engine
         }
 
+        # Dashboard KPIs
+        current_cash = float(engine.starting_balance)
+        min_projected_cash = float(min(p["baseline"] for p in risk_band))
+        worst_tail_cash = float(min(p["p5"] for p in risk_band))
+        fx_exposure_base = float(sum(abs(e.net_exposure_base_ccy) for e in raw_exposures))
+        
+        # 90D through horizon breach variables
+        snap_90 = horizons_snapshots.get("90", {})
+        th_90 = snap_90.get("through_horizon", {})
+        first_breach_date = th_90.get("first_breach_date", None)
+        days_to_breach = th_90.get("days_to_first_breach", None)
+
+        dashboard_kpis = {
+            "current_cash": current_cash,
+            "min_projected_cash": min_projected_cash,
+            "worst_tail_cash": worst_tail_cash,
+            "fx_exposure_base": fx_exposure_base,
+            "first_breach_date": first_breach_date,
+            "days_to_breach": days_to_breach,
+            "overall_risk_level": overall_risk_level,
+            "overall_risk_score": overall_risk_score,
+            "risk_trajectory": trajectory,
+            "risk_pressure": risk_pressure
+        }
+
+        # Chart annotations
+        chart_annotations = {
+            "danger_threshold": danger_threshold,
+            "first_breach_date": first_breach_date,
+            "30D_date": risk_band[29]["date"] if len(risk_band) >= 30 else None,
+            "60D_date": risk_band[59]["date"] if len(risk_band) >= 60 else None,
+            "90D_date": risk_band[89]["date"] if len(risk_band) >= 90 else None
+        }
+
         return {
-            "model_version": "risk_classifier_v1",
+            "model_version": "risk_classifier_v2",
             "method": "rule_based_risk_classification",
             "inputs": [
                 "baseline",
@@ -196,97 +266,149 @@ class RiskClassifier:
                 "FX exposure"
             ],
             "forecast_days": days,
-            "horizons": horizons_snapshots,
-            "horizon_comparison": horizon_comparison_list,
-            "trajectory": trajectory,
             "overall_risk_level": overall_risk_level,
             "overall_risk_score": overall_risk_score,
-            "decision_context": decision_context
+            "risk_trajectory": trajectory,
+            "risk_pressure": risk_pressure,
+            "horizons": horizons_snapshots,
+            "horizon_comparison": horizon_comparison_list,
+            "exposures": exposures_formatted,
+            "dashboard_kpis": dashboard_kpis,
+            "chart_annotations": chart_annotations,
+            "decision_context": decision_context,
+            "risk_band": risk_band
         }
 
     def _classify_horizon(
         self,
         horizon_days: int,
-        day_data: Dict[str, Any],
+        pit_data: Dict[str, Any],
+        horizon_slice: List[Dict[str, Any]],
         danger_threshold: float
     ) -> HorizonSnapshot:
         """
-        Classifies a single forecast day snapshot deterministically using the config policy.
+        Classifies a single forecast day snapshot and through-horizon period deterministically.
         """
-        baseline = float(day_data.get("baseline", 0.0))
-        p5 = float(day_data.get("p5", 0.0))
-        p50 = float(day_data.get("p50", 0.0))
-        p95 = float(day_data.get("p95", 0.0))
-        dt = day_data.get("date", "")
-
-        # Numerical Safeguards / Epsilon
+        # 1. Calculate Point-In-Time (PIT) metrics
+        pit_baseline = float(pit_data.get("baseline", 0.0))
+        pit_p5 = float(pit_data.get("p5", 0.0))
+        pit_p50 = float(pit_data.get("p50", 0.0))
+        pit_p95 = float(pit_data.get("p95", 0.0))
+        pit_dt = pit_data.get("date", "")
         eps = 1e-9
 
-        # Metrics calculation
-        downside_amount = max(0.0, baseline - p5)
-        upside_amount = max(0.0, p95 - baseline)
-        band_width = max(0.0, p95 - p5)
-        downside_pct = downside_amount / max(abs(baseline), eps)
-        band_width_pct = band_width / max(abs(baseline), eps)
+        pit_band_width = max(0.0, pit_p95 - pit_p5)
+        pit_downside = max(0.0, pit_baseline - pit_p5)
+        pit_downside_pct = pit_downside / max(abs(pit_baseline), eps)
 
-        liquidity_buffer = p5 - danger_threshold
-        liquidity_buffer_pct = liquidity_buffer / max(abs(danger_threshold), eps)
+        point_in_time = {
+            "date": pit_dt,
+            "baseline": round(pit_baseline, 2),
+            "p5": round(pit_p5, 2),
+            "p50": round(pit_p50, 2),
+            "p95": round(pit_p95, 2),
+            "band_width": round(pit_band_width, 2),
+            "downside_amount": round(pit_downside, 2),
+            "downside_pct": round(pit_downside_pct, 4)
+        }
 
-        # 1. Determine Liquidity Status
-        if p5 < danger_threshold:
+        # 2. Calculate Through-Horizon (TH) metrics
+        minimum_p5 = float(min(pt["p5"] for pt in horizon_slice))
+        minimum_p50 = float(min(pt["p50"] for pt in horizon_slice))
+        maximum_band_width = float(max(pt["p95"] - pt["p5"] for pt in horizon_slice))
+        maximum_downside = float(max(pt["baseline"] - pt["p5"] for pt in horizon_slice))
+        
+        # Max downside percentage day-by-day
+        maximum_downside_pct = float(max(
+            (pt["baseline"] - pt["p5"]) / max(abs(pt["baseline"]), eps)
+            for pt in horizon_slice
+        ))
+
+        # Max band width percentage day-by-day
+        max_band_pct = float(max(
+            (pt["p95"] - pt["p5"]) / max(abs(pt["baseline"]), eps)
+            for pt in horizon_slice
+        ))
+
+        minimum_liquidity_buffer = minimum_p5 - danger_threshold
+        minimum_liquidity_buffer_pct = minimum_liquidity_buffer / max(abs(danger_threshold), eps)
+
+        # Breach metrics
+        breach_count = 0
+        first_breach_date: Optional[str] = None
+        days_to_first_breach: Optional[int] = None
+
+        for idx, pt in enumerate(horizon_slice):
+            if pt["p5"] < danger_threshold:
+                breach_count += 1
+                if first_breach_date is None:
+                    first_breach_date = pt["date"]
+                    days_to_first_breach = idx + 1
+
+        risk_persistence = float(breach_count / horizon_days)
+
+        through_horizon = {
+            "minimum_p5": round(minimum_p5, 2),
+            "minimum_p50": round(minimum_p50, 2),
+            "maximum_band_width": round(maximum_band_width, 2),
+            "maximum_downside": round(maximum_downside, 2),
+            "maximum_downside_pct": round(maximum_downside_pct, 4),
+            "minimum_liquidity_buffer": round(minimum_liquidity_buffer, 2),
+            "minimum_liquidity_buffer_pct": round(minimum_liquidity_buffer_pct, 4),
+            "first_breach_date": first_breach_date,
+            "breach_count": breach_count,
+            "risk_persistence": round(risk_persistence, 4),
+            "days_to_first_breach": days_to_first_breach
+        }
+
+        # 3. Classifications (Grounded entirely on THROUGH-HORIZON metrics)
+        
+        # Liquidity Status (SAFE, WATCH, BREACH)
+        if minimum_p5 < danger_threshold:
             liquidity_status = "BREACH"
-        elif p5 >= danger_threshold and (p5 - danger_threshold) < (danger_threshold * self.config.watch_buffer_pct):
+        elif minimum_p5 >= danger_threshold and minimum_liquidity_buffer < (danger_threshold * self.config.watch_buffer_pct):
             liquidity_status = "WATCH"
         else:
             liquidity_status = "SAFE"
 
-        # 2. Determine FX Risk Level based on exposures & volatility envelope
-        # Check against configured policy limits
-        if downside_pct >= self.config.high_downside_pct or band_width_pct >= self.config.high_band_pct:
+        # FX Risk Level (LOW, MEDIUM, HIGH)
+        if maximum_downside_pct >= self.config.high_downside_pct or max_band_pct >= self.config.high_band_pct:
             fx_risk_level = "HIGH"
-        elif downside_pct >= self.config.medium_downside_pct or band_width_pct >= self.config.medium_band_pct:
+        elif maximum_downside_pct >= self.config.medium_downside_pct or max_band_pct >= self.config.medium_band_pct:
             fx_risk_level = "MEDIUM"
         else:
             fx_risk_level = "LOW"
 
-        # 3. Calculate Deterministic Risk Severity Score (0-100)
-        # Components: Downside (40%), Liquidity Proximity (40%), Uncertainty (20%)
-        
-        # Downside component
-        downside_score = (downside_pct / self.config.high_downside_pct) * 40.0
+        # Risk score component calculation (deterministic 0-100 score)
+        # Components: Downside (40%), Liquidity Proximity (40%), Volatility Uncertainty (20%)
+        downside_score = (maximum_downside_pct / self.config.high_downside_pct) * 40.0
         downside_score = min(40.0, max(0.0, downside_score))
 
-        # Liquidity proximity component
         if liquidity_status == "BREACH":
             liquidity_score = 40.0
         else:
-            # Scale score based on proximity to safety threshold buffer
+            # Scale score based on buffer
             buffer_limit = danger_threshold * self.config.watch_buffer_pct
-            dist_to_threshold = p5 - danger_threshold
-            if dist_to_threshold <= 0:
-                liquidity_score = 40.0
-            elif dist_to_threshold >= buffer_limit:
-                liquidity_score = 0.0
-            else:
+            if buffer_limit > 0:
+                dist_to_threshold = minimum_p5 - danger_threshold
                 liquidity_score = (1.0 - (dist_to_threshold / buffer_limit)) * 40.0
+            else:
+                liquidity_score = 0.0
+            liquidity_score = min(40.0, max(0.0, liquidity_score))
 
-        # Uncertainty band component
-        uncertainty_score = (band_width_pct / self.config.high_band_pct) * 20.0
+        uncertainty_score = (max_band_pct / self.config.high_band_pct) * 20.0
         uncertainty_score = min(20.0, max(0.0, uncertainty_score))
 
-        # Sum components
         raw_score = downside_score + liquidity_score + uncertainty_score
         risk_score = int(round(raw_score))
         risk_score = min(100, max(0, risk_score))
 
-        # Ensure mathematical consistency: if simulated p5 is a breach, overall risk level is forced to HIGH
+        # Check for mathematical correctness rules: if TH min_p5 breaches, level must be HIGH and score >= 67
         if liquidity_status == "BREACH":
             overall_risk_level = "HIGH"
-            # Ensure risk score reflects HIGH boundary (>= 67)
             if risk_score < 67:
                 risk_score = 67
         else:
-            # Map score to overall risk level
             if risk_score >= 67:
                 overall_risk_level = "HIGH"
             elif risk_score >= 34:
@@ -294,28 +416,25 @@ class RiskClassifier:
             else:
                 overall_risk_level = "LOW"
 
+        classification = {
+            "fx_risk_level": fx_risk_level,
+            "liquidity_status": liquidity_status,
+            "overall_risk_level": overall_risk_level,
+            "risk_score": risk_score
+        }
+
         # 4. Generate Business Explanation
         explanation = self._formulate_explanation(
             horizon_days, overall_risk_level, liquidity_status,
-            downside_pct, liquidity_buffer, danger_threshold
+            maximum_downside_pct, minimum_liquidity_buffer, danger_threshold,
+            first_breach_date, breach_count, pit_p5, pit_baseline
         )
 
         return HorizonSnapshot(
             horizon_days=horizon_days,
-            date=dt,
-            baseline=round(baseline, 2),
-            p5=round(p5, 2),
-            p50=round(p50, 2),
-            p95=round(p95, 2),
-            downside_amount=round(downside_amount, 2),
-            downside_pct=round(downside_pct, 4),
-            band_width=round(band_width, 2),
-            fx_risk_level=fx_risk_level,
-            liquidity_status=liquidity_status,
-            overall_risk_level=overall_risk_level,
-            risk_score=risk_score,
-            liquidity_buffer=round(liquidity_buffer, 2),
-            liquidity_buffer_pct=round(liquidity_buffer_pct, 4),
+            point_in_time=point_in_time,
+            through_horizon=through_horizon,
+            classification=classification,
             explanation=explanation
         )
 
@@ -324,42 +443,75 @@ class RiskClassifier:
         horizon_days: int,
         overall_risk_level: str,
         liquidity_status: str,
-        downside_pct: float,
-        liquidity_buffer: float,
-        danger_threshold: float
+        max_downside_pct: float,
+        min_liquidity_buffer: float,
+        danger_threshold: float,
+        first_breach_date: Optional[str],
+        breach_count: int,
+        terminal_p5: float,
+        terminal_baseline: float
     ) -> str:
         """
-        Formulates a deterministic human-readable explanation based on horizon outcomes.
+        Formulates a deterministic explanation based on metrics. No LLM used.
         """
-        # Description of FX Risk Severity Method
-        desc = f"At the {horizon_days}-day horizon, "
+        desc = f"At the {horizon_days}-day planning horizon, "
 
-        if overall_risk_level == "HIGH":
-            if liquidity_status == "BREACH":
+        if liquidity_status == "BREACH":
+            # Check for recovery scenario (terminal p5 is safe, but breach occurred earlier)
+            if terminal_p5 >= danger_threshold:
                 return desc + (
-                    f"the lower-tail cash projection falls below your liquidity floor by ${abs(liquidity_buffer):,.2f}, "
-                    f"representing a critical threshold breach driven by adverse FX movements."
+                    f"the cash projection recovers to ${terminal_p5:,.2f} by the horizon end, "
+                    f"but the simulated lower-tail scenario breaches the liquidity floor on {first_breach_date} "
+                    f"and remains in breach for {breach_count} forecast days."
                 )
             else:
                 return desc + (
-                    f"FX volatility creates high downside exposure ({downside_pct * 100:.1f}% deviation from baseline), "
-                    f"although the simulated lower-tail cash remains above the ${danger_threshold:,.2f} liquidity floor."
+                    f"the lower-tail cash projection falls below the safety floor by ${abs(min_liquidity_buffer):,.2f} "
+                    f"on {first_breach_date}, creating a potential liquidity shortfall."
                 )
-
-        elif overall_risk_level == "MEDIUM":
-            if liquidity_status == "WATCH":
-                return desc + (
-                    f"the risk-adjusted cash buffer narrows to ${liquidity_buffer:,.2f} above the safety threshold. "
-                    f"Requires monitoring as volatility continues to accumulate."
-                )
-            else:
-                return desc + (
-                    f"FX volatility is moderate (downside deviation: {downside_pct * 100:.1f}%). "
-                    f"The cash position is safe, but cumulative exposure is material."
-                )
-
-        else:  # LOW
+        
+        elif liquidity_status == "WATCH":
             return desc + (
-                f"the simulated FX downside remains negligible ({downside_pct * 100:.1f}% deviation), "
-                f"with cash resources projected comfortably above the liquidity floor."
+                f"FX volatility is material (max downside deviation: {max_downside_pct * 100:.1f}%), and the "
+                f"simulated lower-tail cash projection approaches the safety floor within ${min_liquidity_buffer:,.2f}."
             )
+
+        else:  # SAFE
+            return desc + (
+                f"the simulated lower-tail cash position remains comfortably above the liquidity floor throughout the horizon, "
+                f"with limited modeled FX downside ({max_downside_pct * 100:.1f}% max deviation)."
+            )
+
+    def _calculate_pit_score(self, pit_data: Dict[str, Any], danger_threshold: float) -> int:
+        """
+        Calculates a point-in-time (PIT) risk score on a specific forecast day.
+        """
+        baseline = float(pit_data.get("baseline", 0.0))
+        p5 = float(pit_data.get("p5", 0.0))
+        p95 = float(pit_data.get("p95", 0.0))
+        eps = 1e-9
+
+        downside = max(0.0, baseline - p5)
+        downside_pct = downside / max(abs(baseline), eps)
+        band_width_pct = max(0.0, p95 - p5) / max(abs(baseline), eps)
+
+        downside_score = (downside_pct / self.config.high_downside_pct) * 40.0
+        downside_score = min(40.0, max(0.0, downside_score))
+
+        if p5 < danger_threshold:
+            liquidity_score = 40.0
+        else:
+            buffer_limit = danger_threshold * self.config.watch_buffer_pct
+            if buffer_limit > 0:
+                dist_to_threshold = p5 - danger_threshold
+                liquidity_score = (1.0 - (dist_to_threshold / buffer_limit)) * 40.0
+            else:
+                liquidity_score = 0.0
+            liquidity_score = min(40.0, max(0.0, liquidity_score))
+
+        uncertainty_score = (band_width_pct / self.config.high_band_pct) * 20.0
+        uncertainty_score = min(20.0, max(0.0, uncertainty_score))
+
+        raw_score = downside_score + liquidity_score + uncertainty_score
+        score = int(round(raw_score))
+        return min(100, max(0, score))
