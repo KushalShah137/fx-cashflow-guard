@@ -38,13 +38,13 @@ logger.setLevel(logging.INFO)
 
 # Currency keyword match dictionary (case-insensitive)
 KEYWORD_MAP: Dict[str, List[str]] = {
-    "EUR": ["EUR", "euro", "ECB", "Lagarde"],
-    "GBP": ["GBP", "pound", "sterling", "BoE", "Bank of England"],
-    "USD": ["USD", "dollar", "Fed", "Federal Reserve", "Powell"],
-    "INR": ["INR", "rupee", "RBI"],
-    "CNY": ["CNY", "yuan", "renminbi", "PBOC"],
-    "JPY": ["JPY", "yen", "BoJ", "Bank of Japan"],
-    "AUD": ["AUD", "aussie", "RBA"],
+    "EUR": ["EUR", "euro", "ECB", "Lagarde", "Eurozone"],
+    "GBP": ["GBP", "pound", "sterling", "BoE", "Bank of England", "Bailey"],
+    "USD": ["USD", "dollar", "Fed", "Federal Reserve", "Powell", "Treasury", "Bessent"],
+    "INR": ["INR", "rupee", "RBI", "Reserve Bank of India", "India"],
+    "CNY": ["CNY", "yuan", "renminbi", "PBOC", "China", "Beijing"],
+    "JPY": ["JPY", "yen", "BoJ", "Bank of Japan", "Ueda", "Tokyo"],
+    "AUD": ["AUD", "aussie", "RBA", "Reserve Bank of Australia", "Australia"],
 }
 
 FALLBACK: Dict[str, Any] = {
@@ -59,6 +59,7 @@ FALLBACK: Dict[str, Any] = {
         "volatility_multiplier": 1.0,
     },
     "headline_count": 0,
+    "headlines": [],
     "source": "fallback",
 }
 
@@ -109,7 +110,7 @@ def compute_effective_metrics(
 
 def fetch_fx_news(currency: str) -> List[str]:
     """
-    Fetches forex news from Finnhub and filters by currency-specific keywords.
+    Fetches forex and macro market news from Finnhub and filters by currency-specific keywords.
     Never raises an exception — returns [] on any failure.
     """
     api_key = os.getenv("FINNHUB_API_KEY")
@@ -118,27 +119,22 @@ def fetch_fx_news(currency: str) -> List[str]:
         return []
 
     url = "https://finnhub.io/api/v1/news"
-    params = {"category": "forex", "token": api_key}
     keywords = KEYWORD_MAP.get(currency.upper(), [currency.upper()])
 
     try:
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code != 200:
-            logger.warning(
-                "Finnhub API returned HTTP %d for currency %s: %s",
-                response.status_code,
-                currency,
-                response.text[:200],
-            )
-            return []
-
-        articles = response.json()
-        if not isinstance(articles, list):
-            logger.warning("Finnhub API returned unexpected non-list JSON.")
-            return []
+        all_articles = []
+        for cat in ("forex", "general"):
+            try:
+                resp = requests.get(url, params={"category": cat, "token": api_key}, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        all_articles.extend(data)
+            except Exception as cat_err:
+                logger.warning("Finnhub category %s fetch error: %s", cat, cat_err)
 
         matched_headlines: List[str] = []
-        for item in articles:
+        for item in all_articles:
             if not isinstance(item, dict):
                 continue
             headline = item.get("headline", "")
@@ -174,7 +170,10 @@ def extract_sentiment(
     Never raises an exception — falls back gracefully on any error.
     """
     if not headlines:
-        return FALLBACK.copy()
+        fb = FALLBACK.copy()
+        fb["headlines"] = []
+        fb["headline_count"] = 0
+        return fb
 
     prompt_content = (
         f"You are a quantitative FX market analyst. Analyze the following {len(headlines)} "
@@ -213,7 +212,10 @@ def extract_sentiment(
         content = response.choices[0].message.content
         if not content:
             logger.warning("Ollama returned empty message content for %s.", currency)
-            return FALLBACK.copy()
+            fb = FALLBACK.copy()
+            fb["headlines"] = headlines
+            fb["headline_count"] = len(headlines)
+            return fb
 
         # Parse and validate with Pydantic
         parsed_data = json.loads(content)
@@ -235,6 +237,7 @@ def extract_sentiment(
             },
             "effective": effective,
             "headline_count": len(headlines),
+            "headlines": headlines,
             "source": "live",
         }
 
@@ -242,7 +245,10 @@ def extract_sentiment(
         logger.warning(
             "Sentiment extraction failed for %s (%s). Using fallback.", currency, e
         )
-        return FALLBACK.copy()
+        fb = FALLBACK.copy()
+        fb["headlines"] = headlines
+        fb["headline_count"] = len(headlines)
+        return fb
 
 
 def refresh_news_cache(
@@ -373,7 +379,9 @@ if __name__ == "__main__":
                 mock_openai.return_value = mock_client
 
                 result = extract_sentiment("EUR", ["ECB raises rates by 50 bps"])
-                self.assertEqual(result, FALLBACK)
+                self.assertEqual(result["source"], "fallback")
+                self.assertEqual(result["raw"], FALLBACK["raw"])
+                self.assertEqual(result["headlines"], ["ECB raises rates by 50 bps"])
 
         def test_04_extract_sentiment_invalid_json_returns_fallback(self):
             with patch.object(this_mod, "OpenAI") as mock_openai:
@@ -386,7 +394,9 @@ if __name__ == "__main__":
                 mock_openai.return_value = mock_client
 
                 result = extract_sentiment("EUR", ["ECB raises rates"])
-                self.assertEqual(result, FALLBACK)
+                self.assertEqual(result["source"], "fallback")
+                self.assertEqual(result["raw"], FALLBACK["raw"])
+                self.assertEqual(result["headlines"], ["ECB raises rates"])
 
         def test_05_extract_sentiment_missing_field_returns_fallback(self):
             with patch.object(this_mod, "OpenAI") as mock_openai:
@@ -410,7 +420,9 @@ if __name__ == "__main__":
                 mock_openai.return_value = mock_client
 
                 result = extract_sentiment("EUR", ["ECB statement issued"])
-                self.assertEqual(result, FALLBACK)
+                self.assertEqual(result["source"], "fallback")
+                self.assertEqual(result["raw"], FALLBACK["raw"])
+                self.assertEqual(result["headlines"], ["ECB statement issued"])
 
         def test_06_confidence_scaling_math(self):
             # 1. Confidence = 0.0 -> drift=0.0, multiplier=1.0

@@ -5,6 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json
+import logging
+import threading
 from datetime import date, datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
@@ -17,6 +19,9 @@ from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, get_model_d
 from backend.risk_classifier import RiskClassifier
 from backend.decision_engine import DecisionEngine
 from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
+from backend.news_sentiment import refresh_news_cache, run_background_refresh
+
+logger = logging.getLogger("main")
 
 app = FastAPI(
     title="fx-cashflow-guard Backend",
@@ -34,9 +39,33 @@ app.add_middleware(
 )
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_transactions.json"
+NEWS_CACHE_PATH = DATA_PATH.parent / "news_sentiment_cache.json"
 
 # In-memory singleton instance for live interactive demo state
 _engine_instance: Optional[CashFlowEngine] = None
+
+
+def get_cached_news_adjustments(use_news_adjustment: bool = True) -> Optional[Dict[str, Any]]:
+    """Loads current news sentiment cache if present and enabled; returns None on any failure."""
+    if not use_news_adjustment or not NEWS_CACHE_PATH.exists():
+        return None
+    try:
+        with open(NEWS_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not read news sentiment cache: {e}")
+        return None
+
+
+@app.on_event("startup")
+def startup_news_refresh():
+    """Launches news sentiment background refresh loop in a non-blocking daemon thread on app startup."""
+    thread = threading.Thread(
+        target=run_background_refresh,
+        kwargs={"interval_minutes": 15, "output_path": str(NEWS_CACHE_PATH)},
+        daemon=True,
+    )
+    thread.start()
 
 
 def save_and_enrich_recommendations(decisions: dict) -> dict:
@@ -90,7 +119,8 @@ def var_color_for_dir(direction: str) -> str:
 
 def generate_landing_page_html(engine: CashFlowEngine) -> str:
     threshold = engine.danger_threshold or 20000.0
-    band_points = get_risk_band_v2(engine=engine, days=90, n_simulations=200, seed=42)
+    news_adj = get_cached_news_adjustments(True)
+    band_points = get_risk_band_v2(engine=engine, days=90, n_simulations=200, seed=42, news_adjustments=news_adj)
     min_p5 = min(p["p5"] for p in band_points) if band_points else engine.starting_balance
     has_breach = min_p5 < threshold
     status_label = "CRITICAL BREACH" if has_breach else "LIQUIDITY SAFE"
@@ -100,6 +130,106 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
     exposures = engine.get_currency_exposures()
     currencies_str = ", ".join(e.currency for e in exposures) or "EUR, GBP, INR, CNY, JPY, AUD"
     demo_actions = engine.get_demo_actions()
+
+    generated_at_display = "Never (Pending initial refresh)"
+    if news_adj and news_adj.get("generated_at"):
+        generated_at_display = news_adj.get("generated_at")
+
+    modeled_currencies = ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"]
+    sentiment_cards_html = []
+    ccy_news_dict = news_adj.get("currencies", news_adj) if news_adj else {}
+
+    for ccy in modeled_currencies:
+        info = ccy_news_dict.get(ccy, {}) if isinstance(ccy_news_dict, dict) else {}
+        raw = info.get("raw", {})
+        eff = info.get("effective", {})
+        score = raw.get("sentiment_score", 0.0)
+        vol_mult = eff.get("volatility_multiplier", 1.0)
+        drift_bps = eff.get("drift_bias_bps", 0.0)
+        src = info.get("source", "fallback")
+        hl_count = info.get("headline_count", 0)
+        headlines = info.get("headlines", [])
+
+        # Sentiment badge color & text
+        if score > 0.15:
+            sent_color = "var(--emerald)"
+            sent_bg = "rgba(0, 230, 118, 0.15)"
+            sent_label = f"+{score:.2f} (BULLISH)"
+        elif score < -0.15:
+            sent_color = "var(--coral)"
+            sent_bg = "rgba(255, 23, 68, 0.15)"
+            sent_label = f"{score:.2f} (BEARISH)"
+        else:
+            sent_color = "var(--amber)"
+            sent_bg = "rgba(255, 179, 0, 0.15)"
+            sent_label = f"{score:.2f} (NEUTRAL)"
+
+        # Drift text and arrow
+        if drift_bps > 0:
+            drift_str = f"+{drift_bps:.1f} bps &uarr;"
+            drift_color = "var(--emerald)"
+        elif drift_bps < 0:
+            drift_str = f"{drift_bps:.1f} bps &darr;"
+            drift_color = "var(--coral)"
+        else:
+            drift_str = f"{drift_bps:.1f} bps &rarr;"
+            drift_color = "var(--muted)"
+
+        # Source badge
+        if str(src).lower() == "live":
+            src_badge = '<span style="font-size:10px; font-weight:700; color:var(--cyan); background:rgba(0,229,255,0.15); border:1px solid var(--cyan); padding:2px 6px; border-radius:3px;">LIVE</span>'
+        else:
+            src_badge = '<span style="font-size:10px; font-weight:700; color:var(--muted); background:rgba(148,163,184,0.15); border:1px solid var(--border); padding:2px 6px; border-radius:3px;">FALLBACK</span>'
+
+        if headlines:
+            hl_items = "".join(f'<li style="margin-bottom:4px; line-height:1.3; color:var(--text); list-style-type:square; margin-left:14px;">{h}</li>' for h in headlines[:5])
+            headlines_html = f"""
+            <div style="font-size:10px; color:var(--muted); border-top:1px solid var(--border); padding-top:6px; margin-top:4px;">
+              <details style="cursor:pointer;" open>
+                <summary style="font-weight:700; color:var(--cyan); outline:none; font-size:10px;">
+                  {hl_count} Live Headline{'s' if hl_count != 1 else ''} &#9662;
+                </summary>
+                <ul style="margin-top:6px; max-height:85px; overflow-y:auto; padding-right:4px; font-size:9.5px;">
+                  {hl_items}
+                </ul>
+              </details>
+            </div>
+            """
+        else:
+            headlines_html = f"""
+            <div style="font-size:10px; color:var(--muted); border-top:1px solid var(--border); padding-top:6px; margin-top:4px;">
+              0 Finnhub headlines (fallback)
+            </div>
+            """
+
+        card = f"""
+        <div style="background:var(--card); border:1px solid var(--border); border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between; gap:8px;">
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <span style="font-size:14px; font-weight:700; color:var(--cyan);">{ccy}</span>
+              {src_badge}
+            </div>
+            <div>
+              <div style="font-size:10px; color:var(--muted); text-transform:uppercase; margin-bottom:2px;">Sentiment</div>
+              <span style="font-size:11px; font-weight:700; color:{sent_color}; background:{sent_bg}; border:1px solid {sent_color}; padding:2px 6px; border-radius:3px; display:inline-block;">{sent_label}</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; margin-top:6px;">
+              <div>
+                <span style="color:var(--muted); font-size:10px;">Vol Mult:</span>
+                <div style="font-weight:700; color:var(--text);">{vol_mult:.2f}x</div>
+              </div>
+              <div>
+                <span style="color:var(--muted); font-size:10px;">Drift Bias:</span>
+                <div style="font-weight:700; color:{drift_color};">{drift_str}</div>
+              </div>
+            </div>
+          </div>
+          {headlines_html}
+        </div>
+        """
+        sentiment_cards_html.append(card)
+
+    sentiment_grid_html = "".join(sentiment_cards_html)
     
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -393,6 +523,25 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
       </div>
     </div>
 
+    <!-- Macro News Sentiment Layer -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+      <div class="section-title" style="margin-bottom: 0;">📰 Macro News Sentiment Layer (Finnhub &bull; Qwen2.5 LLM)</div>
+      <button class="btn-action" onclick="refreshNewsSentiment()" id="btn-refresh-news" style="background: rgba(0, 229, 255, 0.2); color: var(--cyan); border-color: var(--cyan);">↻ REFRESH NEWS SENTIMENT</button>
+    </div>
+    <div class="dashboard-panel" style="margin-bottom: 28px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+        <p style="font-size: 12px; color: var(--muted); margin: 0;">
+          Real-time macroeconomic sentiment extracted via local Qwen2.5:7b-instruct. Directly scales Monte Carlo volatility diagonals and injects drift terms.
+        </p>
+        <div style="font-size: 11px; color: var(--cyan); background: rgba(0, 229, 255, 0.1); padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(0, 229, 255, 0.2);">
+          Last Updated: <span style="font-weight: 700; color: var(--text);">{generated_at_display}</span>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px;">
+        {sentiment_grid_html}
+      </div>
+    </div>
+
     <!-- Visualization Telemetry Hub -->
     <div class="section-title">📊 Visual Telemetry & Analytics Dashboard</div>
     <div class="dashboard-panel">
@@ -453,6 +602,10 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
       <a class="api-card" href="/docs" target="_blank">
         <div><span class="method">UI</span><span class="path">/docs</span></div>
         <div class="desc">Interactive Swagger API documentation & testing sandbox.</div>
+      </a>
+      <a class="api-card" href="/news-sentiment" target="_blank">
+        <div><span class="method">GET</span><span class="path">/news-sentiment</span></div>
+        <div class="desc">Raw LLM macro news sentiment cache & per-currency volatility/drift adjustments.</div>
       </a>
       <a class="api-card" href="/risk-overview?days=90" target="_blank">
         <div><span class="method">GET</span><span class="path">/risk-overview</span></div>
@@ -523,6 +676,25 @@ def generate_landing_page_html(engine: CashFlowEngine) -> str:
         }}
       }} catch (e) {{
         alert('Error: ' + e);
+      }}
+    }}
+
+    async function refreshNewsSentiment() {{
+      const btn = document.getElementById('btn-refresh-news');
+      if (btn) {{ btn.innerText = '↻ REFRESHING...'; btn.disabled = true; }}
+      try {{
+        const res = await fetch('/refresh-news', {{ method: 'POST' }});
+        if (res.ok) {{
+          alert('News sentiment refresh completed! Reloading telemetry...');
+          window.location.reload();
+        }} else {{
+          const err = await res.json();
+          alert('Error refreshing news sentiment: ' + JSON.stringify(err));
+          if (btn) {{ btn.innerText = '↻ REFRESH NEWS SENTIMENT'; btn.disabled = false; }}
+        }}
+      }} catch (e) {{
+        alert('Network error: ' + e);
+        if (btn) {{ btn.innerText = '↻ REFRESH NEWS SENTIMENT'; btn.disabled = false; }}
       }}
     }}
   </script>
@@ -608,23 +780,59 @@ def get_demo_actions():
     return engine.get_demo_actions()
 
 
+@app.post("/refresh-news")
+def refresh_news():
+    """Manually triggers synchronous FX news sentiment refresh and writes to cache."""
+    try:
+        payload = refresh_news_cache(output_path=str(NEWS_CACHE_PATH))
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"News sentiment refresh failed: {e}")
+
+
+@app.get("/news-sentiment")
+def get_news_sentiment():
+    """Reads and returns the current raw contents of data/news_sentiment_cache.json."""
+    if not NEWS_CACHE_PATH.exists():
+        return {
+            "status": "pending",
+            "message": "No news sentiment refresh has run yet. Cache file data/news_sentiment_cache.json not found.",
+            "generated_at": None,
+            "currencies": {},
+        }
+    try:
+        with open(NEWS_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to read news sentiment cache: {e}",
+            "generated_at": None,
+            "currencies": {},
+        }
+
+
 @app.get("/risk-band")
 def risk_band(
     days: int = Query(90, ge=1, le=180, description="Forecast horizon in days"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     band = get_risk_band_v2(
         engine=engine,
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     return {
         "days": days,
         "simulations": simulations,
         "currency": engine.base_currency,
+        "use_news_adjustment": use_news_adjustment,
         "risk_band": band
     }
 
@@ -632,21 +840,24 @@ def risk_band(
 @app.get("/risk-diagnostics")
 def risk_diagnostics():
     cache_path = DATA_PATH.parent / "fx_historical_cache.json"
-    return get_model_diagnostics(cache_path=cache_path)
+    return get_model_diagnostics(cache_path=cache_path, news_cache_path=NEWS_CACHE_PATH)
 
 
 @app.get("/risk-classification", response_model=RiskClassificationResponse)
 def risk_classification(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     band = get_risk_band_v2(
         engine=engine,
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
@@ -657,8 +868,10 @@ def risk_classification(
 def risk_overview(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     # 1. Compute deterministic Layer 1 baseline forecast
     pts = engine.get_forecast(days=days, base_date=DEFAULT_START_DATE)
     baseline_list = [p.to_dict() for p in pts]
@@ -669,7 +882,8 @@ def risk_overview(
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     
     # 3. Run classification
@@ -697,14 +911,17 @@ def risk_overview(
 def get_decisions(
     days: int = Query(90, ge=90, le=180, description="Forecast horizon in days (minimum 90)"),
     simulations: int = Query(2000, ge=10, le=10000, description="Number of Monte Carlo simulation runs"),
+    use_news_adjustment: bool = Query(True, description="Apply macro news sentiment adjustments"),
 ):
     engine = get_engine()
+    news_adj = get_cached_news_adjustments(use_news_adjustment)
     band = get_risk_band_v2(
         engine=engine,
         days=days,
         n_simulations=simulations,
         seed=42,
-        cache_path=DATA_PATH.parent / "fx_historical_cache.json"
+        cache_path=DATA_PATH.parent / "fx_historical_cache.json",
+        news_adjustments=news_adj,
     )
     classifier = RiskClassifier()
     classification = classifier.classify(engine, band, days=days)
@@ -990,7 +1207,11 @@ def viz_dashboard(
     """
     engine = get_engine()
     html_content = get_dashboard_html(engine=engine, currency=currency, days=days)
-    return HTMLResponse(content=html_content, status_code=200)
+    return HTMLResponse(
+        content=html_content,
+        status_code=200,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
 
 
 @app.get("/viz/dashboard.png")
@@ -1003,7 +1224,11 @@ def viz_dashboard_png(
     """
     engine = get_engine()
     png_bytes = get_dashboard_png_bytes(engine=engine, currency=currency, days=days)
-    return Response(content=png_bytes, media_type="image/png")
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
+    )
 
 
 if __name__ == "__main__":
