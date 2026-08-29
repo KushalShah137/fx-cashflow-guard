@@ -555,12 +555,25 @@ class CashFlowEngine:
     ) -> Transaction:
         """
         Apply a hedging/settlement action (e.g. 'convert_and_hold' or 'settle_now')
-        to a pending transaction in memory.
+        to a pending transaction in memory, triggering Wise Sandbox quote first.
         """
         action_norm = action.lower().strip()
         tx = self.get_transaction_by_id(transaction_id)
         if not tx:
             raise InvalidTransactionError(f"No transaction found with id '{transaction_id}'")
+
+        # Step: Call Wise Sandbox API (graceful fallback on any error/timeout/missing keys)
+        try:
+            from backend.wise_api import execute_wise_action
+            wise_result = execute_wise_action(
+                action=action_norm,
+                currency=tx.currency,
+                amount=tx.amount,
+                base_currency=self.base_currency,
+            )
+            logger.info("Wise Sandbox result for %s (%s): %s", transaction_id, action_norm, wise_result.get("status"))
+        except Exception as e:
+            logger.warning("Wise Sandbox API call encountered an error: %s. Proceeding with local ledger update.", e)
 
         idx = next(i for i, t in enumerate(self.transactions) if t.id == transaction_id)
         target_date = self._resolve_base_date(settle_date) if settle_date else tx.date
