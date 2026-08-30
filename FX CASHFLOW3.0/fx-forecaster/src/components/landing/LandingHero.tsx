@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react"
+import { ScrollCoinCanvas } from "./ScrollCoinCanvas"
 
 interface LandingHeroProps {
   onOpenLogin: () => void
@@ -16,73 +17,7 @@ export function LandingHero({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isCardVisible, setIsCardVisible] = useState(false)
 
-  const coinRef = useRef<HTMLDivElement>(null)
-  const coinFloatRef = useRef<HTMLDivElement>(null)
-  const coinShadowRef = useRef<HTMLDivElement>(null)
   const signupCardRef = useRef<HTMLDivElement>(null)
-
-  // ---------------------------------------------------------------------------
-  // 3D Coin Rotation on Fixed Axis & Floating Physics
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    const coin = coinRef.current
-    const coinFloat = coinFloatRef.current
-    const coinShadow = coinShadowRef.current
-    if (!coin || !coinFloat || !coinShadow) return
-
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    const startTime = performance.now()
-    let animationFrameId: number
-
-    let currentAngle = 0
-    let targetAngle = 0
-    let lastScrollY = window.scrollY
-
-    const onScroll = () => {
-      const scrollY = window.scrollY
-      const delta = scrollY - lastScrollY
-      lastScrollY = scrollY
-      // Rotate coin on fixed Y-axis based on scroll delta
-      targetAngle += delta * 0.95
-    }
-    window.addEventListener("scroll", onScroll, { passive: true })
-
-    const FLOAT_AMPLITUDE = 14 // px, vertical float range
-    const FLOAT_PERIOD_MS = 4200 // ms, full float cycle
-
-    const animate = (now: number) => {
-      if (!reduceMotion) {
-        const elapsed = now - startTime
-
-        // Momentum easing towards target scroll angle + subtle idle drift
-        currentAngle += (targetAngle - currentAngle) * 0.08
-        targetAngle += 0.03 // Gentle idle spin so it stays alive
-        const wobble = Math.sin(currentAngle * (Math.PI / 180) * 2) * 3.0
-
-        coin.style.transform = `rotateY(${currentAngle}deg) rotateX(${wobble}deg)`
-
-        // Vertical sine wave hovering
-        const floatPhase = (elapsed / FLOAT_PERIOD_MS) * Math.PI * 2
-        const floatY = Math.sin(floatPhase) * FLOAT_AMPLITUDE
-        coinFloat.style.transform = `translateY(${floatY}px)`
-
-        // Dynamic shadow reacting to float height
-        const floatNorm = (floatY + FLOAT_AMPLITUDE) / (FLOAT_AMPLITUDE * 2) // 0..1
-        const shadowScale = 0.85 + (1 - floatNorm) * 0.22
-        const shadowOpacity = 0.55 + (1 - floatNorm) * 0.45
-        coinShadow.style.transform = `translateX(-50%) scale(${shadowScale.toFixed(3)})`
-        coinShadow.style.opacity = shadowOpacity.toFixed(3)
-      }
-      animationFrameId = requestAnimationFrame(animate)
-    }
-
-    animationFrameId = requestAnimationFrame(animate)
-
-    return () => {
-      window.removeEventListener("scroll", onScroll)
-      cancelAnimationFrame(animationFrameId)
-    }
-  }, [])
 
   // ---------------------------------------------------------------------------
   // Intersection Observer for Smooth Signup Entry
@@ -140,7 +75,7 @@ export function LandingHero({
       className="bg-[#F5F1E8] text-[#14120E] w-full overflow-x-hidden select-none"
     >
       {/* ============================================================
-          SECTION 1: HERO WITH 3D ROTATING COIN ON FIXED AXIS
+          SECTION 1: HERO WITH THREE.JS 3D CYLINDER GOLD COIN
       ============================================================= */}
       <section
         id="hero"
@@ -151,7 +86,7 @@ export function LandingHero({
           FX // FORECASTER — sandboxed treasury simulation environment. Not connected to production funds.
         </div>
 
-        {/* Hero Grid Container: Left Copy Block + Right 3D Coin */}
+        {/* Hero Grid Container: Left Copy Block + Right 3D WebGL Coin */}
         <div className="relative z-10 w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-center pt-20 pb-16 lg:py-0">
           {/* Left Copy Block */}
           <div className="lg:col-span-7 max-w-[620px]">
@@ -180,80 +115,19 @@ export function LandingHero({
             </div>
           </div>
 
-          {/* Right 3D Revolving Coin Stage */}
+          {/* Right 3D Revolving WebGL Gold Coin Stage */}
           <div className="lg:col-span-5 flex justify-center items-center relative min-h-[380px] sm:min-h-[480px] lg:min-h-[560px]">
-            <div
-              className="relative w-[320px] h-[320px] sm:w-[440px] sm:h-[440px] lg:w-[500px] lg:h-[500px] flex items-center justify-center"
-              aria-hidden="true"
-            >
-              {/* Vertical Float Container */}
-              <div
-                ref={coinFloatRef}
-                className="w-full h-full relative"
-                style={{ willChange: "transform" }}
-              >
-                {/* 3D Perspective Wrapper */}
-                <div
-                  className="w-full h-full relative"
-                  style={{ perspective: "1600px" }}
-                >
-                  {/* 3D Rotating Coin on Fixed Axis */}
-                  <div
-                    ref={coinRef}
-                    className="w-full h-full relative"
-                    style={{
-                      transformStyle: "preserve-3d",
-                      willChange: "transform",
-                    }}
-                  >
-                    {/* Front Face */}
-                    <div
-                      className="absolute inset-0 flex items-center justify-center"
-                      style={{
-                        backfaceVisibility: "hidden",
-                        WebkitBackfaceVisibility: "hidden",
-                        transform: "translateZ(1px)",
-                      }}
-                    >
-                      <img
-                        src="/gold-coin.png"
-                        alt="3D Gold Treasury Coin"
-                        className="w-full h-full object-contain pointer-events-none select-none drop-shadow-[0_22px_32px_rgba(80,55,10,0.32)]"
-                        style={{ mixBlendMode: "multiply" }}
-                        draggable={false}
-                      />
-                    </div>
+            <div className="relative w-[340px] h-[340px] sm:w-[460px] sm:h-[460px] lg:w-[520px] lg:h-[520px] flex items-center justify-center">
+              {/* WebGL 3D Coin Canvas */}
+              <ScrollCoinCanvas />
 
-                    {/* Back Face (Mirrored 180deg) */}
-                    <div
-                      className="absolute inset-0 flex items-center justify-center"
-                      style={{
-                        backfaceVisibility: "hidden",
-                        WebkitBackfaceVisibility: "hidden",
-                        transform: "rotateY(180deg) scaleX(-1) translateZ(1px)",
-                      }}
-                    >
-                      <img
-                        src="/gold-coin.png"
-                        alt="3D Gold Treasury Coin Back"
-                        className="w-full h-full object-contain pointer-events-none select-none drop-shadow-[0_22px_32px_rgba(80,55,10,0.32)]"
-                        style={{ mixBlendMode: "multiply" }}
-                        draggable={false}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Dynamic Floor Shadow */}
+              {/* Dynamic Soft Floor Shadow */}
               <div
-                ref={coinShadowRef}
-                className="absolute left-1/2 bottom-[2%] w-[65%] h-[36px] -translate-x-1/2 pointer-events-none"
+                className="absolute left-1/2 bottom-[4%] w-[65%] h-[34px] -translate-x-1/2 pointer-events-none"
                 style={{
                   background:
-                    "radial-gradient(ellipse at center, rgba(30, 20, 0, 0.35) 0%, rgba(30, 20, 0, 0.12) 55%, transparent 75%)",
+                    "radial-gradient(ellipse at center, rgba(30, 20, 0, 0.38) 0%, rgba(30, 20, 0, 0.12) 55%, transparent 75%)",
                   filter: "blur(4px)",
-                  willChange: "transform, opacity",
                 }}
               />
             </div>
