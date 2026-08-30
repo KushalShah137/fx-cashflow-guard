@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-30T07:21:41Z",
+  "generated_at": "2026-08-30T08:09:11Z",
   "currencies": {
     "EUR": {
       "raw": {
@@ -23,11 +23,11 @@
       "raw": {
         "sentiment_score": 0.3,
         "volatility_multiplier": 0.8,
-        "drift_bias_bps": 2.5,
+        "drift_bias_bps": 1.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": 1.75,
+        "drift_bias_bps": 1.05,
         "volatility_multiplier": 0.86
       },
       "headline_count": 2,
@@ -41,11 +41,11 @@
       "raw": {
         "sentiment_score": -0.2,
         "volatility_multiplier": 1.1,
-        "drift_bias_bps": -2.5,
+        "drift_bias_bps": -2.0,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.75,
+        "drift_bias_bps": -1.4,
         "volatility_multiplier": 1.07
       },
       "headline_count": 12,
