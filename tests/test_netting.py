@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from backend.netting_engine import NettingEngine
+from backend.engines.netting_engine import NettingEngine
 
 
 class MockTransaction:

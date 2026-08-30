@@ -7,8 +7,8 @@ import json
 import unittest
 import numpy as np
 
-from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_classifier import RiskClassifier, RiskClassificationConfig
+from backend.engines.cash_flow import CashFlowEngine
+from backend.engines.risk_classifier import RiskClassifier, RiskClassificationConfig
 
 class TestRiskClassifier(unittest.TestCase):
 

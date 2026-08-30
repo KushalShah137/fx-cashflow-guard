@@ -1,5 +1,9 @@
 {
+<<<<<<< Updated upstream
   "generated_at": "2026-08-30T19:03:12Z",
+=======
+  "generated_at": "2026-08-30T20:01:43Z",
+>>>>>>> Stashed changes
   "currencies": {
     "EUR": {
       "raw": {
@@ -39,14 +43,14 @@
     },
     "USD": {
       "raw": {
-        "sentiment_score": -0.2,
+        "sentiment_score": -0.25,
         "volatility_multiplier": 1.2,
         "drift_bias_bps": -2.5,
-        "confidence": 0.7
+        "confidence": 0.75
       },
       "effective": {
-        "drift_bias_bps": -1.75,
-        "volatility_multiplier": 1.14
+        "drift_bias_bps": -1.875,
+        "volatility_multiplier": 1.15
       },
       "headline_count": 16,
       "headlines": [
@@ -74,11 +78,16 @@
         "sentiment_score": -0.2,
         "volatility_multiplier": 1.05,
         "drift_bias_bps": -2.0,
-        "confidence": 0.7
+        "confidence": 0.75
       },
       "effective": {
+<<<<<<< Updated upstream
         "drift_bias_bps": -1.4,
         "volatility_multiplier": 1.035
+=======
+        "drift_bias_bps": -1.5,
+        "volatility_multiplier": 1.0375
+>>>>>>> Stashed changes
       },
       "headline_count": 4,
       "headlines": [

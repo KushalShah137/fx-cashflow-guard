@@ -22,9 +22,9 @@ if not logger.handlers:
     logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "treasury.db"
-MOCK_TX_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_transactions.json"
-FX_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
+DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "treasury.db"
+MOCK_TX_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "mock_transactions.json"
+FX_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "fx_historical_cache.json"
 
 
 def get_db_connection() -> sqlite3.Connection:

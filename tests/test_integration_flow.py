@@ -9,10 +9,10 @@ import unittest
 import numpy as np
 from pathlib import Path
 
-from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model_v2 import get_risk_band, DEFAULT_START_DATE
-from backend.risk_classifier import RiskClassifier
-from backend.decision_engine import DecisionEngine, ActionType, ActionPriority
+from backend.engines.cash_flow import CashFlowEngine
+from backend.engines.risk_model import get_risk_band, DEFAULT_START_DATE
+from backend.engines.risk_classifier import RiskClassifier
+from backend.engines.decision_engine import DecisionEngine, ActionType, ActionPriority
 
 class TestIntegrationFlow(unittest.TestCase):
 

@@ -29,7 +29,7 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 FRANKFURTER_BASE_URL = "https://api.frankfurter.dev/v1"
-DEFAULT_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
+DEFAULT_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "fx_historical_cache.json"
 DEFAULT_SYMBOLS = ["EUR", "GBP", "INR", "CNY", "JPY", "AUD"]
 
 

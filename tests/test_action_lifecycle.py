@@ -1,7 +1,7 @@
 import unittest
 from fastapi.testclient import TestClient
 from backend.main import app
-from backend.state_machine import validate_transition, LifecycleError, RecommendationState
+from backend.services.state_machine import validate_transition, LifecycleError, RecommendationState
 
 
 class TestActionLifecycle(unittest.TestCase):

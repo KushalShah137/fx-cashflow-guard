@@ -31,7 +31,7 @@ from datetime import date, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 
-from backend.cash_flow_engine import CashFlowEngine, TransactionStatus, FlowDirection
+from backend.engines.cash_flow import CashFlowEngine, TransactionStatus, FlowDirection
 
 # --------------------------------------------------------------------------- #
 # Logging
@@ -43,8 +43,8 @@ if not logger.handlers:
     logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
 
-CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
-NEWS_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "news_sentiment_cache.json"
+CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "fx_historical_cache.json"
+NEWS_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "news_sentiment_cache.json"
 DEFAULT_START_DATE = date(2026, 9, 1)  # Align with mock transactions date range
 DEFAULT_CURRENCIES: Tuple[str, ...] = ("EUR", "GBP", "INR", "CNY", "JPY", "AUD")
 
@@ -186,6 +186,76 @@ def load_aligned_returns(
     return return_matrix, list(currencies)
 
 
+<<<<<<< Updated upstream:backend/risk_model_v2.py
+=======
+def load_aligned_returns_from_db(
+    currencies: Tuple[str, ...] = DEFAULT_CURRENCIES
+) -> Tuple[np.ndarray, List[str]]:
+    from backend.database.connection import SessionLocal
+    from backend.database.models import FxRate
+    session = SessionLocal()
+    try:
+        query = session.query(FxRate.date, FxRate.currency, FxRate.rate).filter(
+            FxRate.currency.in_([c.upper() for c in currencies])
+        ).order_by(FxRate.date.asc()).all()
+
+        if not query:
+            raise ValueError("No FX rate records found in database.")
+
+        date_map: Dict[str, Dict[str, float]] = {}
+        for r_date, r_ccy, r_rate in query:
+            dt_str = str(r_date)
+            if dt_str not in date_map:
+                date_map[dt_str] = {}
+            if r_rate and r_rate > 0:
+                date_map[dt_str][r_ccy.upper()] = float(r_rate)
+
+        sorted_dates = sorted(date_map.keys())
+        aligned_dates: List[str] = []
+        aligned_rates: Dict[str, List[float]] = {ccy: [] for ccy in currencies}
+
+        for dt in sorted_dates:
+            rates_for_date = date_map[dt]
+            if all(ccy in rates_for_date for ccy in currencies):
+                aligned_dates.append(dt)
+                for ccy in currencies:
+                    aligned_rates[ccy].append(rates_for_date[ccy])
+
+        n_obs = len(aligned_dates)
+        if n_obs < 3:
+            raise ValueError(f"Insufficient aligned observations ({n_obs}) in DB to calculate historical returns.")
+
+        log_returns_list = []
+        for ccy in currencies:
+            prices = np.array(aligned_rates[ccy], dtype=np.float64)
+            returns = np.diff(np.log(prices))
+            log_returns_list.append(returns)
+
+        return_matrix = np.column_stack(log_returns_list)
+        logger.info(
+            "Successfully loaded and aligned %d historical FX return observations from DB for %s",
+            return_matrix.shape[0], currencies
+        )
+        return return_matrix, list(currencies)
+    finally:
+        session.close()
+
+
+def load_aligned_returns(
+    cache_path: Path = CACHE_PATH,
+    currencies: Tuple[str, ...] = DEFAULT_CURRENCIES
+) -> Tuple[np.ndarray, List[str]]:
+    if USE_DB_FOR_FX_DATA:
+        try:
+            return load_aligned_returns_from_db(currencies=currencies)
+        except Exception as e:
+            logger.warning("DB FX loading failed (%s). Falling back to JSON cache.", e)
+            return _load_from_json_legacy(cache_path=cache_path, currencies=currencies)
+    else:
+        return _load_from_json_legacy(cache_path=cache_path, currencies=currencies)
+
+
+>>>>>>> Stashed changes:backend/engines/risk_model.py
 # --------------------------------------------------------------------------- #
 # Step 2: Correlation & Covariance Matrix Calculations
 # --------------------------------------------------------------------------- #

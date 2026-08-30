@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.main import app
-from backend.wise_api import WiseSandboxClient, FALLBACK_INDICATIVE_RATES
+from backend.integrations.wise import WiseSandboxClient, FALLBACK_INDICATIVE_RATES
 
 
 class TestDemoHardening(unittest.TestCase):

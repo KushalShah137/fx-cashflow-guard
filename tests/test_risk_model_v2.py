@@ -7,8 +7,8 @@ import unittest
 from datetime import date
 import numpy as np
 
-from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model_v2 import (
+from backend.engines.cash_flow import CashFlowEngine
+from backend.engines.risk_model import (
     load_aligned_returns,
     calculate_historical_covariance_and_correlation,
     stabilized_cholesky,
@@ -113,7 +113,7 @@ class TestRiskModelV2(unittest.TestCase):
         self.assertIn("correlation_matrix", diag)
 
     def test_news_parameter_computation(self):
-        from backend.risk_model_v2 import compute_news_parameters
+        from backend.engines.risk_model import compute_news_parameters
         mock_news = {
             "currencies": {
                 "EUR": {
