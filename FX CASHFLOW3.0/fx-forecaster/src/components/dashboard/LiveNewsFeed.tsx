@@ -296,7 +296,7 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
           </div>
 
           {/* Stacking Container */}
-          <div className="relative w-full min-h-[260px] flex items-center justify-center">
+          <div className="relative w-full min-h-[220px]">
             <AnimatePresence mode="popLayout">
               {!isExhausted ? (
                 remainingCards.slice(0, 3).map((item, stackIdx) => {
@@ -312,22 +312,22 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
                     ? "border-l-4 border-l-[#B91C1C]"
                     : "border-l-4 border-l-[#71717A]"
 
-                  const bgWashClass = isBullish
-                    ? "bg-[#FFFFFF] hover:bg-[#F9FCFB]"
-                    : isBearish
-                    ? "bg-[#FFFFFF] hover:bg-[#FCF9F9]"
-                    : "bg-[#FFFFFF]"
-
                   const pillColor = isBullish
                     ? "bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]"
                     : isBearish
                     ? "bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]"
                     : "bg-[#F4F3EE] text-[#71717A] border-[#E4E2D9]"
 
+                  const impactBgClass = isBullish
+                    ? "bg-[#F0FDF4] border-[#DCFCE7]"
+                    : isBearish
+                    ? "bg-[#FEF2F2] border-[#FEE2E2]"
+                    : "bg-[#FAF9F5] border-[#E4E2D9]"
+
                   // Stacking transform calculations
-                  const yOffset = stackIdx * 12
-                  const scale = 1 - stackIdx * 0.05
-                  const opacity = 1 - stackIdx * 0.25
+                  const yOffset = stackIdx * 10
+                  const scale = 1 - stackIdx * 0.04
+                  const opacity = 1 - stackIdx * 0.22
                   const zIndex = 30 - stackIdx * 10
 
                   return (
@@ -354,12 +354,12 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
                         left: 0,
                         right: 0,
                       }}
-                      className={`rounded-xl border border-[#E4E2D9] ${borderAccentClass} ${bgWashClass} shadow-md p-5 flex flex-col justify-between select-none ${
+                      className={`rounded-xl border border-[#E4E2D9] ${borderAccentClass} bg-[#FFFFFF] shadow-sm p-4 sm:p-5 select-none ${
                         isTop ? "pointer-events-auto cursor-default" : "pointer-events-none"
                       }`}
                     >
-                      {/* Card Top Row */}
-                      <div className="flex items-center justify-between mb-3">
+                      {/* Card Top Row: Metadata */}
+                      <div className="flex items-center justify-between gap-2 mb-2.5">
                         <div className="flex items-center gap-2">
                           <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${pillColor}`}>
                             {item.currency} • {item.sentimentLabel.toUpperCase()}
@@ -373,33 +373,40 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
                         </span>
                       </div>
 
-                      {/* Card Headline Body */}
-                      <div className="space-y-2 my-2">
-                        <h4 className="text-sm font-bold text-[#18181B] leading-snug font-sans">
+                      {/* Card Headline */}
+                      <div className="my-1.5">
+                        <h4 className="text-[15px] sm:text-base font-bold text-[#18181B] leading-snug font-sans tracking-tight line-clamp-2">
                           {item.headline}
                         </h4>
-                        <p className="text-[11px] text-[#71717A] font-sans">
+                      </div>
+
+                      {/* Impact Callout Sub-Block */}
+                      <div className={`border rounded-lg px-3 py-2 my-2.5 ${impactBgClass}`}>
+                        <div className="text-xs font-semibold font-sans">
                           {item.sentimentLabel === "bullish" ? (
-                            <span className="text-[#047857] font-semibold flex items-center gap-1">
-                              <TrendingUp className="w-3 h-3 inline" /> Upward bias on {item.currency} cash flow valuations (+{item.driftBps} bps drift).
+                            <span className="text-[#047857] flex items-center gap-1.5">
+                              <TrendingUp className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span>Upward bias on {item.currency} cash flow valuations (+{item.driftBps} bps drift).</span>
                             </span>
                           ) : item.sentimentLabel === "bearish" ? (
-                            <span className="text-[#B91C1C] font-semibold flex items-center gap-1">
-                              <TrendingDown className="w-3 h-3 inline" /> Downward variance pressure ({item.volatilityMultiplier}x vol multiplier applied).
+                            <span className="text-[#B91C1C] flex items-center gap-1.5">
+                              <TrendingDown className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span>Downward variance pressure ({item.volatilityMultiplier}x vol multiplier applied).</span>
                             </span>
                           ) : (
-                            <span className="text-[#71717A] flex items-center gap-1">
-                              <Minus className="w-3 h-3 inline" /> Neutral macro shock — baseline forecast maintained.
+                            <span className="text-[#71717A] flex items-center gap-1.5">
+                              <Minus className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span>Neutral macro shock — baseline forecast maintained.</span>
                             </span>
                           )}
-                        </p>
+                        </div>
                       </div>
 
                       {/* Card Bottom Action Bar */}
-                      <div className="flex items-center justify-between border-t border-[#F4F3EE] pt-3.5 mt-2">
-                        <div className="text-[10px] text-[#A1A1AA] font-mono">
+                      <div className="flex items-center justify-between border-t border-[#F4F3EE] pt-3 mt-1">
+                        <span className="text-[10px] text-[#71717A] font-mono font-medium tracking-wider uppercase">
                           SWIPE OR CLICK NEXT
-                        </div>
+                        </span>
 
                         <button
                           onClick={handleNext}
