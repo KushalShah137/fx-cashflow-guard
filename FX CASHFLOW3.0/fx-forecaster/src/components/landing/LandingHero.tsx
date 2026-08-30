@@ -26,8 +26,11 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
       <main className="hero">
         <ScrollCoinCanvas />
 
+        {/* Hero Headline & CTA Actions */}
         <div className="hero-text">
-          <h1 className="hero-title">See your future balance as a risk range, not a guess — and fix it in one click.</h1>
+          <h1 className="hero-title">
+            See your future balance as a risk range, not a guess — and fix it in one click.
+          </h1>
           <div className="cta-row">
             <button 
               onClick={onNavigateDashboard}
@@ -39,11 +42,12 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
               onClick={onOpenLogin}
               className="btn btn-light uppercase font-bold"
             >
-              OPERATOR LOGIN (NODE_01)
+              Wise Sandbox
             </button>
           </div>
         </div>
 
+        {/* Sign In to Treasury Form Card */}
         <div className="signin-card">
           <h2>Sign in to Treasury</h2>
           <p className="sub">Access automated risk hedging and live sandbox feeds</p>
@@ -51,43 +55,45 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
           <form onSubmit={handleLogin}>
             <label className="signin-label">Corporate Email</label>
             <div className="field">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M4 4h16v16H4z" opacity="0"/>
-                <path d="M22 6l-10 7L2 6"/>
-                <path d="M2 6h20v12H2z"/>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#71717A]">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="M22 6l-10 7L2 6" />
               </svg>
               <input 
-                type="text" 
+                type="email" 
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="treasury@acmeglobal.com"
                 required
               />
             </div>
 
             <label className="signin-label">Master Key / Password</label>
             <div className="field">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="4" y="10" width="16" height="10" rx="2"/>
-                <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#71717A]">
+                <rect x="4" y="10" width="16" height="10" rx="2" />
+                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
               </svg>
               <input 
                 type="password" 
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
                 required
               />
             </div>
 
-            <button type="submit" className="signin-submit" disabled={isSubmitting}>
-              {isSubmitting ? "Logging in..." : "Log in to Workspace →"}
+            <button type="submit" className="signin-submit font-bold" disabled={isSubmitting}>
+              {isSubmitting ? "Authenticating..." : "Log in to Workspace →"}
             </button>
           </form>
           
           <div className="demo-link">
             Exploring the interface?{" "}
             <button 
+              type="button"
               onClick={onNavigateDashboard}
-              className="underline cursor-pointer font-bold text-black border-none bg-transparent p-0"
+              className="underline cursor-pointer font-bold text-[#18181B] border-none bg-transparent p-0"
             >
               Try interactive demo
             </button>
