@@ -170,44 +170,48 @@ export function App() {
       <header className="nav">
         <div className="nav-left">
           <span className="nav-badge">FX</span>
-          <span>FX // FORECASTER</span>
+          <span className="font-bold tracking-wider">FX // FORECASTER</span>
         </div>
-        <div className="nav-center">
-          <button
-            onClick={() => setCurrentPage("landing")}
-            className={`nav-tab ${currentPage === "landing" ? "active" : ""}`}
-          >
-            Login (/)
-          </button>
-          <button
-            onClick={() => setCurrentPage("dashboard")}
-            className={`nav-tab ${currentPage === "dashboard" ? "active" : ""}`}
-          >
-            DASHBOARD (/dashboard)
-          </button>
-          <button
-            onClick={() => setCurrentPage("wise")}
-            className={`nav-tab ${currentPage === "wise" ? "active" : ""}`}
-          >
-            WISE SANDBOX (/wise)
-          </button>
-        </div>
+        {currentPage !== "landing" && (
+          <div className="nav-center">
+            <button
+              onClick={() => setCurrentPage("landing")}
+              className={`nav-tab ${currentPage === "landing" ? "active" : ""}`}
+            >
+              Login (/)
+            </button>
+            <button
+              onClick={() => setCurrentPage("dashboard")}
+              className={`nav-tab ${currentPage === "dashboard" ? "active" : ""}`}
+            >
+              DASHBOARD (/dashboard)
+            </button>
+            <button
+              onClick={() => setCurrentPage("wise")}
+              className={`nav-tab ${currentPage === "wise" ? "active" : ""}`}
+            >
+              WISE SANDBOX (/wise)
+            </button>
+          </div>
+        )}
         <div className="avatar" onClick={() => setIsLoginModalOpen(true)}>KL</div>
       </header>
 
-      <div className="ticker">
-        <div className="ticker-left">
-          <span><span className="dot"></span>MARKET TELEMETRY ACTIVE</span>
-          <span className="divider">|</span>
-          <span>USD/INR <span className="up">87.41 (+0.14%)</span></span>
-          <span>EUR/INR <span className="down">93.00 (−0.08%)</span></span>
-          <span>GBP/INR <span className="up">110.20 (+0.22%)</span></span>
+      {currentPage !== "landing" && (
+        <div className="ticker">
+          <div className="ticker-left">
+            <span><span className="dot"></span>MARKET TELEMETRY ACTIVE</span>
+            <span className="divider">|</span>
+            <span>USD/INR <span className="up">87.41 (+0.14%)</span></span>
+            <span>EUR/INR <span className="down">93.00 (−0.08%)</span></span>
+            <span>GBP/INR <span className="up">110.20 (+0.22%)</span></span>
+          </div>
+          <div className="ticker-right">
+            <span>BASE CURRENCY: INR (₹)</span>
+            <span>LATENCY: 14MS</span>
+          </div>
         </div>
-        <div className="ticker-right">
-          <span>BASE CURRENCY: INR (₹)</span>
-          <span>LATENCY: 14MS</span>
-        </div>
-      </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1">

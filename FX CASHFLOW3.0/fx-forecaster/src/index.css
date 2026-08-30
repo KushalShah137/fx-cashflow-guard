@@ -181,10 +181,10 @@ header.nav {
 /* ---------- HERO ---------- */
 main.hero {
   position: relative;
-  min-height: 860px;
-  padding: 90px 5vw 140px;
+  min-height: calc(100vh - 80px);
+  padding: 40px 5vw;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 40px;
   overflow: hidden;
@@ -199,14 +199,13 @@ main.hero {
 .hero-text {
   position: relative;
   z-index: 5;
-  max-width: 760px;
-  padding-top: 40px;
+  max-width: 720px;
 }
 h1.hero-title {
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-weight: 800;
-  font-size: clamp(34px, 4.4vw, 62px);
-  line-height: 1.04;
+  font-size: clamp(34px, 4.4vw, 60px);
+  line-height: 1.05;
   letter-spacing: -1.2px;
   margin: 0 0 34px 0;
 }
@@ -242,20 +241,19 @@ h1.hero-title {
 .signin-card {
   position: relative;
   z-index: 5;
-  background: rgba(242,241,236,0.94);
+  background: rgba(242,241,236,0.96);
   border: 1px solid #c9c7bc;
   border-radius: 14px;
   padding: 34px 34px 30px;
   width: 400px;
   flex-shrink: 0;
-  box-shadow: 0 30px 60px -20px rgba(0,0,0,0.15);
+  box-shadow: 0 20px 50px -20px rgba(0,0,0,0.12);
   backdrop-filter: blur(6px);
-  transform: rotate(-0.35deg);
-  transition: transform .25s ease, box-shadow .25s ease;
+  transition: box-shadow .25s ease, border-color .25s ease;
 }
 .signin-card:hover {
-  transform: rotate(-0.35deg) translateY(-2px);
-  box-shadow: 0 34px 70px -18px rgba(0,0,0,0.18);
+  border-color: #a8a69a;
+  box-shadow: 0 24px 60px -18px rgba(0,0,0,0.15);
 }
 .signin-card h2 {
   font-family: "Helvetica Neue",Arial,sans-serif;
@@ -271,7 +269,7 @@ h1.hero-title {
   margin: 0 0 26px 0;
 }
 label.signin-label {
-  display: block; font-size: 13px; margin-bottom: 8px; color: var(--ink);
+  display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--ink);
 }
 .field {
   display: flex; align-items: center; gap: 9px;
@@ -305,7 +303,7 @@ label.signin-label {
   text-align: center; font-size: 13px; color: var(--ink-soft);
   margin-top: 18px;
 }
-.demo-link a { text-decoration: underline; color: var(--ink); }
+.demo-link button { text-decoration: underline; color: var(--ink); }
 
 /* ---------- FOOTER CAPTION ---------- */
 .footnote {
