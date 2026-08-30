@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-30T07:21:41Z",
+  "generated_at": "2026-08-30T07:37:30Z",
   "currencies": {
     "EUR": {
       "raw": {
@@ -40,13 +40,13 @@
     "USD": {
       "raw": {
         "sentiment_score": -0.2,
-        "volatility_multiplier": 1.1,
+        "volatility_multiplier": 1.2,
         "drift_bias_bps": -2.5,
         "confidence": 0.7
       },
       "effective": {
         "drift_bias_bps": -1.75,
-        "volatility_multiplier": 1.07
+        "volatility_multiplier": 1.14
       },
       "headline_count": 12,
       "headlines": [
