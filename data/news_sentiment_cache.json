@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-29T23:46:11Z",
+  "generated_at": "2026-08-30T07:21:41Z",
   "currencies": {
     "EUR": {
       "raw": {
@@ -23,11 +23,11 @@
       "raw": {
         "sentiment_score": 0.3,
         "volatility_multiplier": 0.8,
-        "drift_bias_bps": 1.5,
+        "drift_bias_bps": 2.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": 1.05,
+        "drift_bias_bps": 1.75,
         "volatility_multiplier": 0.86
       },
       "headline_count": 2,
@@ -41,11 +41,11 @@
       "raw": {
         "sentiment_score": -0.2,
         "volatility_multiplier": 1.1,
-        "drift_bias_bps": -2.0,
+        "drift_bias_bps": -2.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.4,
+        "drift_bias_bps": -1.75,
         "volatility_multiplier": 1.07
       },
       "headline_count": 12,
@@ -76,8 +76,9 @@
         "drift_bias_bps": -1.4,
         "volatility_multiplier": 1.07
       },
-      "headline_count": 7,
+      "headline_count": 8,
       "headlines": [
+        "Indian bank stocks see sharp NSE-BSE closing price gaps under new auction system",
         "India\u2019s new stock closing auction: How it works and why it is struggling",
         "Raghuram Rajan urges Fed to raise rates, says rupee is not in panic zone",
         "Bosnian Serb general Ratko Mladic, convicted of genocide, has died, Serbian TV reports - Reuters",
@@ -110,16 +111,17 @@
       "raw": {
         "sentiment_score": -0.3,
         "volatility_multiplier": 1.2,
-        "drift_bias_bps": -2.0,
+        "drift_bias_bps": -2.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.4,
+        "drift_bias_bps": -1.75,
         "volatility_multiplier": 1.14
       },
-      "headline_count": 2,
+      "headline_count": 3,
       "headlines": [
         "Bessent says disorderly yen moves can destabilize global markets - Reuters",
+        "Reliance Industries firm buys Lutyens Delhi bungalow for \u20b9350 crore",
         "Bessent attacks Warren over yen intervention query, offers \u2018Foreign Exchange for Dummies\u2019 lesson"
       ],
       "source": "live"
