@@ -1286,8 +1286,6 @@ _api_audit_logs: List[Dict[str, Any]] = [
 ]
 
 
-<<<<<<< Updated upstream
-=======
 def get_latest_fx_rate(currency: str, default_rate: float = 1.0) -> float:
     """Queries SQLite fx_rates table for the most recent FX exchange rate for the specified currency."""
     if currency == "USD":
@@ -1308,9 +1306,6 @@ def get_latest_fx_rate(currency: str, default_rate: float = 1.0) -> float:
 
     engine = get_engine()
     return float(engine.fx_rates.get(currency.upper(), default_rate))
-
-
->>>>>>> Stashed changes
 @app.get("/api/forecast")
 def api_get_forecast(
     horizon: int = Query(60, description="Horizon in days (30, 60, 90)"),
@@ -1368,7 +1363,7 @@ def api_get_forecast(
     elif min_worst < danger_inr * 1.25:
         risk_status = "CAUTION"
 
-    return {
+    payload = {
         "horizon_days": horizon,
         "base_currency": "INR",
         "starting_balance": round(engine.starting_balance * inr_rate, 2),
@@ -1383,8 +1378,6 @@ def api_get_forecast(
         "timeline": timeline,
     }
 
-<<<<<<< Updated upstream
-=======
     # Persist simulation run and AI explanation as a safe non-blocking side-effect
     try:
         _persist_simulation_run_safe(
@@ -1502,18 +1495,12 @@ def api_get_simulation_history(limit: int = Query(20, description="Max history r
         logger.warning(f"Error fetching simulation history from DB: {e}")
         return {"count": 0, "history": [], "error": str(e)}
 
->>>>>>> Stashed changes
 
 @app.get("/api/transactions")
 def api_get_transactions():
     engine = get_engine()
-<<<<<<< Updated upstream
-    inr_rate = engine.fx_rates.get("INR", 95.39)
-    from backend.state_machine import get_all_recommendations
-=======
     inr_rate = get_latest_fx_rate("INR", 95.39)
     from backend.services.state_machine import get_all_recommendations
->>>>>>> Stashed changes
     recs = get_all_recommendations()
     recs_by_tx = {r["transaction_id"]: r for r in recs}
 

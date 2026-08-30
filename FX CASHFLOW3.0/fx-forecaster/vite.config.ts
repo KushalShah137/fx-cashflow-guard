@@ -17,6 +17,14 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      "/refresh-news": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/news-sentiment": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
 })

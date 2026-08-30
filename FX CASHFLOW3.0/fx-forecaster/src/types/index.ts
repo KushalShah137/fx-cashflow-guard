@@ -53,12 +53,29 @@ export interface Transaction {
   rationale: string
 }
 
+export interface CurrencySentimentItem {
+  raw: {
+    sentiment_score: number
+    volatility_multiplier: number
+    drift_bias_bps: number
+    confidence: number
+  }
+  effective: {
+    drift_bias_bps: number
+    volatility_multiplier: number
+  }
+  headline_count: number
+  headlines: string[]
+  source: string
+}
+
 export interface MarketSentiment {
   sentiment_summary: string
   drift_adjustment: number
   volatility_adjustment: number
   last_updated: string
   headlines: string[]
+  currencies?: Record<string, CurrencySentimentItem>
 }
 
 export interface WiseQuoteRequest {

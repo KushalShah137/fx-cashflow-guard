@@ -13,6 +13,7 @@ import {
   fetchForecast,
   fetchTransactions,
   fetchMarketSentiment,
+  refreshMarketSentiment,
   fetchBalances,
   fetchAuditLogs,
   fetchEconomicImpact,
@@ -59,8 +60,28 @@ export function App() {
   })
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
   const [isLoadingForecast, setIsLoadingForecast] = useState(false)
+  const [isRefreshingNews, setIsRefreshingNews] = useState(false)
   const [economicImpact, setEconomicImpact] = useState<EconomicImpactResponse | null>(null)
   const [actions, setActions] = useState<RecommendationLifecycle[]>([])
+
+  const handleRefreshNews = async () => {
+    setIsRefreshingNews(true)
+    try {
+      const updatedSentiment = await refreshMarketSentiment()
+      setSentiment(updatedSentiment)
+      const data = await fetchForecast({
+        horizon,
+        stress_currency: stressCurrency,
+        stress_pct: stressPct,
+        risk_tolerance: riskTolerance,
+      })
+      setForecast(data)
+    } catch (e) {
+      console.error("Failed to refresh market sentiment", e)
+    } finally {
+      setIsRefreshingNews(false)
+    }
+  }
 
   // Load Data
   const loadForecastData = useCallback(async () => {
@@ -288,7 +309,11 @@ export function App() {
             />
 
             {/* Live Macro News Telemetry & Quantitative Regime Synthesis */}
-            <LiveNewsFeed sentiment={sentiment} />
+            <LiveNewsFeed
+              sentiment={sentiment}
+              onRefreshNews={handleRefreshNews}
+              isRefreshing={isRefreshingNews}
+            />
           </div>
         )}
 

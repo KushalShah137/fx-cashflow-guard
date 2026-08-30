@@ -69,10 +69,13 @@ def init_db(force: bool = False) -> None:
             # 2. FX Rates Table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS fx_rates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    currency_pair TEXT NOT NULL,
+                    currency TEXT,
                     date TEXT NOT NULL,
-                    currency TEXT NOT NULL,
                     rate REAL NOT NULL,
-                    PRIMARY KEY (date, currency)
+                    source TEXT DEFAULT 'Frankfurter/ECB',
+                    UNIQUE(currency_pair, date)
                 );
             """)
 
@@ -216,10 +219,10 @@ def seed_db(conn: sqlite3.Connection) -> None:
                         if ccy in row:
                             conn.execute(
                                 """
-                                INSERT OR REPLACE INTO fx_rates (date, currency, rate)
-                                VALUES (?, ?, ?)
+                                INSERT OR REPLACE INTO fx_rates (currency_pair, currency, date, rate, source)
+                                VALUES (?, ?, ?, ?, ?)
                                 """,
-                                (dt, ccy, float(row[ccy]))
+                                (f"{ccy.upper()}/USD", ccy.upper(), dt, float(row[ccy]), "Frankfurter/ECB")
                             )
 
         # Write initial audit log

@@ -47,6 +47,7 @@ CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "fx_histor
 NEWS_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "news_sentiment_cache.json"
 DEFAULT_START_DATE = date(2026, 9, 1)  # Align with mock transactions date range
 DEFAULT_CURRENCIES: Tuple[str, ...] = ("EUR", "GBP", "INR", "CNY", "JPY", "AUD")
+USE_DB_FOR_FX_DATA: bool = True
 
 
 def load_news_sentiment_cache(cache_path: Path = NEWS_CACHE_PATH) -> Optional[Dict[str, Any]]:
@@ -123,7 +124,7 @@ def compute_news_parameters(
 # --------------------------------------------------------------------------- #
 # Step 1: Parse and Load Aligned Historical FX Data & Log Returns
 # --------------------------------------------------------------------------- #
-def load_aligned_returns(
+def _load_from_json_legacy(
     cache_path: Path = CACHE_PATH,
     currencies: Tuple[str, ...] = DEFAULT_CURRENCIES
 ) -> Tuple[np.ndarray, List[str]]:
@@ -186,8 +187,6 @@ def load_aligned_returns(
     return return_matrix, list(currencies)
 
 
-<<<<<<< Updated upstream:backend/risk_model_v2.py
-=======
 def load_aligned_returns_from_db(
     currencies: Tuple[str, ...] = DEFAULT_CURRENCIES
 ) -> Tuple[np.ndarray, List[str]]:
@@ -253,9 +252,6 @@ def load_aligned_returns(
             return _load_from_json_legacy(cache_path=cache_path, currencies=currencies)
     else:
         return _load_from_json_legacy(cache_path=cache_path, currencies=currencies)
-
-
->>>>>>> Stashed changes:backend/engines/risk_model.py
 # --------------------------------------------------------------------------- #
 # Step 2: Correlation & Covariance Matrix Calculations
 # --------------------------------------------------------------------------- #

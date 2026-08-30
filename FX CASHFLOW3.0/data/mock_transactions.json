@@ -119,7 +119,7 @@
       "id": "txn_011",
       "date": "2026-10-15",
       "currency": "USD",
-      "amount": -22000.0,
+      "amount": -14000.0,
       "description": "Core Engineering Payroll - Mid Month",
       "type": "payroll",
       "status": "pending"
@@ -184,7 +184,7 @@
       "id": "txn_018",
       "date": "2026-11-22",
       "currency": "USD",
-      "amount": 35000.0,
+      "amount": 20000.0,
       "description": "Q4 Enterprise License Renewal",
       "type": "receivable",
       "status": "pending"
@@ -260,6 +260,186 @@
       "currency": "AUD",
       "amount": 25000.0,
       "description": "Melbourne Commercial Bank Integration",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_027",
+      "date": "2026-09-05",
+      "currency": "EUR",
+      "amount": 18500.0,
+      "description": "Amsterdam SaaS Enterprise Expansion",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_028",
+      "date": "2026-09-09",
+      "currency": "INR",
+      "amount": -850000.0,
+      "description": "Hyderabad QA Automation & Testing Suite",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_029",
+      "date": "2026-09-14",
+      "currency": "USD",
+      "amount": 14200.0,
+      "description": "North America Customer Success Retainer",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_030",
+      "date": "2026-09-19",
+      "currency": "GBP",
+      "amount": -8800.0,
+      "description": "Cambridge AI Research Consortium Dues",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_031",
+      "date": "2026-09-23",
+      "currency": "JPY",
+      "amount": 1750000.0,
+      "description": "Kyoto Robotics Integration Milestone 1",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_032",
+      "date": "2026-09-26",
+      "currency": "CNY",
+      "amount": -110000.0,
+      "description": "Guangzhou Server Chassis Production Run",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_033",
+      "date": "2026-10-02",
+      "currency": "AUD",
+      "amount": 23000.0,
+      "description": "Sydney FinTech Platform Licensing Q4",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_034",
+      "date": "2026-10-05",
+      "currency": "USD",
+      "amount": -4500.0,
+      "description": "Global Cloud Infrastructure Scale Reserve",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_035",
+      "date": "2026-10-08",
+      "currency": "EUR",
+      "amount": -3000.0,
+      "description": "Dublin European Data Center Power & Rack",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_036",
+      "date": "2026-10-14",
+      "currency": "INR",
+      "amount": 1100000.0,
+      "description": "Bangalore Enterprise Core Banking Integration",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_037",
+      "date": "2026-10-17",
+      "currency": "GBP",
+      "amount": 9500.0,
+      "description": "Edinburgh Wealth Management SaaS Deploy",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_038",
+      "date": "2026-10-22",
+      "currency": "JPY",
+      "amount": -2100000.0,
+      "description": "Yokohama Subsea Cable Bandwidth Allocation",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_039",
+      "date": "2026-10-27",
+      "currency": "CNY",
+      "amount": 65000.0,
+      "description": "Hangzhou Cloud Marketplace Revenue Share",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_040",
+      "date": "2026-10-29",
+      "currency": "AUD",
+      "amount": -22000.0,
+      "description": "Brisbane Telecommunications Gateway Link",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_041",
+      "date": "2026-11-03",
+      "currency": "USD",
+      "amount": 9000.0,
+      "description": "US Mid-Market SaaS Contract Settlement",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_042",
+      "date": "2026-11-06",
+      "currency": "EUR",
+      "amount": 8000.0,
+      "description": "Rotterdam Logistics Automation Software",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_043",
+      "date": "2026-11-12",
+      "currency": "INR",
+      "amount": -1250000.0,
+      "description": "Pune DevSecOps Security Audit & Patching",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_044",
+      "date": "2026-11-16",
+      "currency": "GBP",
+      "amount": -11500.0,
+      "description": "London Legal Counsel International Tax Filing",
+      "type": "payable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_045",
+      "date": "2026-11-20",
+      "currency": "JPY",
+      "amount": 1200000.0,
+      "description": "Tokyo APAC Regional HQ Platform Milestone",
+      "type": "receivable",
+      "status": "pending"
+    },
+    {
+      "id": "txn_046",
+      "date": "2026-11-25",
+      "currency": "AUD",
+      "amount": 19500.0,
+      "description": "Perth Mining & Commodities FX Gateway",
       "type": "receivable",
       "status": "pending"
     }
