@@ -296,7 +296,7 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
           </div>
 
           {/* Stacking Container */}
-          <div className="relative w-full min-h-[220px]">
+          <div className="relative w-full h-[200px]">
             <AnimatePresence mode="popLayout">
               {!isExhausted ? (
                 remainingCards.slice(0, 3).map((item, stackIdx) => {
@@ -324,17 +324,17 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
                     ? "bg-[#FEF2F2] border-[#FEE2E2]"
                     : "bg-[#FAF9F5] border-[#E4E2D9]"
 
-                  // Stacking transform calculations
-                  const yOffset = stackIdx * 10
+                  // Stacking transform calculations: subtle clean layered tabs
+                  const yOffset = stackIdx * 8
                   const scale = 1 - stackIdx * 0.04
-                  const opacity = 1 - stackIdx * 0.22
+                  const opacity = isTop ? 1 : 0.85 - stackIdx * 0.25
                   const zIndex = 30 - stackIdx * 10
 
                   return (
                     <motion.div
                       key={item.id}
                       layout
-                      initial={{ scale: 0.9, y: 20, opacity: 0 }}
+                      initial={{ scale: 0.92, y: 16, opacity: 0 }}
                       animate={{
                         scale,
                         y: yOffset,
@@ -353,69 +353,77 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
                         top: 0,
                         left: 0,
                         right: 0,
+                        bottom: 0,
                       }}
-                      className={`rounded-xl border border-[#E4E2D9] ${borderAccentClass} bg-[#FFFFFF] shadow-sm p-4 sm:p-5 select-none ${
-                        isTop ? "pointer-events-auto cursor-default" : "pointer-events-none"
+                      className={`rounded-xl border border-[#E4E2D9] ${borderAccentClass} bg-[#FFFFFF] shadow-sm p-4 sm:p-4 flex flex-col justify-between select-none ${
+                        isTop ? "pointer-events-auto cursor-default" : "pointer-events-none overflow-hidden"
                       }`}
                     >
-                      {/* Card Top Row: Metadata */}
-                      <div className="flex items-center justify-between gap-2 mb-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${pillColor}`}>
-                            {item.currency} • {item.sentimentLabel.toUpperCase()}
-                          </span>
-                          <span className="text-[10px] font-bold text-[#71717A] uppercase tracking-wider">
-                            FINNHUB PIPELINE
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-[#A1A1AA] font-mono">
-                          {item.timestamp}
-                        </span>
-                      </div>
-
-                      {/* Card Headline */}
-                      <div className="my-1.5">
-                        <h4 className="text-[15px] sm:text-base font-bold text-[#18181B] leading-snug font-sans tracking-tight line-clamp-2">
-                          {item.headline}
-                        </h4>
-                      </div>
-
-                      {/* Impact Callout Sub-Block */}
-                      <div className={`border rounded-lg px-3 py-2 my-2.5 ${impactBgClass}`}>
-                        <div className="text-xs font-semibold font-sans">
-                          {item.sentimentLabel === "bullish" ? (
-                            <span className="text-[#047857] flex items-center gap-1.5">
-                              <TrendingUp className="w-3.5 h-3.5 flex-shrink-0" />
-                              <span>Upward bias on {item.currency} cash flow valuations (+{item.driftBps} bps drift).</span>
+                      {isTop ? (
+                        <>
+                          {/* Card Top Row: Metadata */}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${pillColor}`}>
+                                {item.currency} • {item.sentimentLabel.toUpperCase()}
+                              </span>
+                              <span className="text-[10px] font-bold text-[#71717A] uppercase tracking-wider">
+                                FINNHUB PIPELINE
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-[#A1A1AA] font-mono">
+                              {item.timestamp}
                             </span>
-                          ) : item.sentimentLabel === "bearish" ? (
-                            <span className="text-[#B91C1C] flex items-center gap-1.5">
-                              <TrendingDown className="w-3.5 h-3.5 flex-shrink-0" />
-                              <span>Downward variance pressure ({item.volatilityMultiplier}x vol multiplier applied).</span>
-                            </span>
-                          ) : (
-                            <span className="text-[#71717A] flex items-center gap-1.5">
-                              <Minus className="w-3.5 h-3.5 flex-shrink-0" />
-                              <span>Neutral macro shock — baseline forecast maintained.</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                          </div>
 
-                      {/* Card Bottom Action Bar */}
-                      <div className="flex items-center justify-between border-t border-[#F4F3EE] pt-3 mt-1">
-                        <span className="text-[10px] text-[#71717A] font-mono font-medium tracking-wider uppercase">
-                          SWIPE OR CLICK NEXT
-                        </span>
+                          {/* Card Headline */}
+                          <div className="my-1">
+                            <h4 className="text-[15px] sm:text-base font-bold text-[#18181B] leading-snug font-sans tracking-tight line-clamp-2">
+                              {item.headline}
+                            </h4>
+                          </div>
 
-                        <button
-                          onClick={handleNext}
-                          className="px-3.5 py-1.5 text-xs font-bold bg-[#18181B] text-[#FAF9F5] hover:bg-[#27272A] rounded flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
-                        >
-                          <span>NEXT</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                          {/* Impact Callout Sub-Block */}
+                          <div className={`border rounded-lg px-3 py-1.5 ${impactBgClass}`}>
+                            <div className="text-xs font-semibold font-sans">
+                              {item.sentimentLabel === "bullish" ? (
+                                <span className="text-[#047857] flex items-center gap-1.5">
+                                  <TrendingUp className="w-3.5 h-3.5 flex-shrink-0" />
+                                  <span>Upward bias on {item.currency} cash flow valuations (+{item.driftBps} bps drift).</span>
+                                </span>
+                              ) : item.sentimentLabel === "bearish" ? (
+                                <span className="text-[#B91C1C] flex items-center gap-1.5">
+                                  <TrendingDown className="w-3.5 h-3.5 flex-shrink-0" />
+                                  <span>Downward variance pressure ({item.volatilityMultiplier}x vol multiplier applied).</span>
+                                </span>
+                              ) : (
+                                <span className="text-[#71717A] flex items-center gap-1.5">
+                                  <Minus className="w-3.5 h-3.5 flex-shrink-0" />
+                                  <span>Neutral macro shock — baseline forecast maintained.</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Card Bottom Action Bar */}
+                          <div className="flex items-center justify-between border-t border-[#F4F3EE] pt-2.5">
+                            <span className="text-[10px] text-[#71717A] font-mono font-medium tracking-wider uppercase">
+                              SWIPE OR CLICK NEXT
+                            </span>
+
+                            <button
+                              onClick={handleNext}
+                              className="px-3.5 py-1.5 text-xs font-bold bg-[#18181B] text-[#FAF9F5] hover:bg-[#27272A] rounded flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
+                            >
+                              <span>NEXT</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        /* Clean background card surface without duplicate ghost text */
+                        <div className="w-full h-full" />
+                      )}
                     </motion.div>
                   )
                 })
