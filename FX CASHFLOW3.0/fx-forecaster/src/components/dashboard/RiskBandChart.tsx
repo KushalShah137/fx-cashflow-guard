@@ -222,6 +222,7 @@ export function RiskBandChart({
 
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
+            key={forecast ? `${forecast.summary?.expected_final_balance || 0}-${forecast.summary?.value_at_risk_95 || 0}-${horizon}-${riskTolerance}` : "loading"}
             data={chartData}
             margin={{ top: 15, right: 25, left: 20, bottom: 20 }}
           >

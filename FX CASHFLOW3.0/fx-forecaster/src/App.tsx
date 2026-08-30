@@ -26,7 +26,7 @@ import { ContainerScroll } from "@/components/ui/container-scroll-animation"
 import { RiskBandChart } from "@/components/dashboard/RiskBandChart"
 import { StressTestBar } from "@/components/dashboard/StressTestBar"
 import { ExposureMatrix } from "@/components/dashboard/ExposureMatrix"
-import { QuantExplainer } from "@/components/dashboard/QuantExplainer"
+import { LiveNewsFeed } from "@/components/dashboard/LiveNewsFeed"
 import { CalibrationAudit } from "@/components/dashboard/CalibrationAudit"
 import { MultiWallet } from "@/components/wise/MultiWallet"
 import { WiseQuoteModal } from "@/components/wise/WiseQuoteModal"
@@ -113,7 +113,7 @@ export function App() {
     try {
       const updated = await approveAction(actionId)
       setActions(prev => prev.map(a => a.action_id === actionId ? updated : a))
-      loadForecastData()
+      await loadForecastData()
     } catch (e: any) {
       alert(e.message || "Failed to approve action")
     }
@@ -126,7 +126,7 @@ export function App() {
       const [txs, logs] = await Promise.all([fetchTransactions(), fetchAuditLogs()])
       setTransactions(txs)
       setAuditLogs(logs)
-      loadForecastData()
+      await loadForecastData()
     } catch (e: any) {
       alert(e.message || "Failed to reject action")
     }
@@ -161,7 +161,7 @@ export function App() {
     setAuditLogs(logs)
     setActions(actionList)
     setEconomicImpact(impact)
-    loadForecastData()
+    await loadForecastData()
   }
 
   return (
@@ -287,20 +287,8 @@ export function App() {
               onResetStress={handleResetStress}
             />
 
-            {/* 3-Way Exposure Classification Matrix Table */}
-            <ExposureMatrix
-              transactions={transactions}
-              actions={actions}
-              onApproveAction={handleApprove}
-              onRejectAction={handleReject}
-              onSelectTransactionForAction={handleOpenWiseAction}
-            />
-
-            {/* AI Quant Diagnostic Panel & Macro Drift Engine */}
-            <QuantExplainer sentiment={sentiment} />
-
-            {/* Past Forecast vs Actual Trust Calibration & Immutable Audit Log */}
-            <CalibrationAudit auditLogs={auditLogs} />
+            {/* Live Macro News Telemetry & Quantitative Regime Synthesis */}
+            <LiveNewsFeed sentiment={sentiment} />
           </div>
         )}
 
