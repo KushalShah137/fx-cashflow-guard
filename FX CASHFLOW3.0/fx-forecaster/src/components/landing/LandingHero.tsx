@@ -55,11 +55,7 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
           <form onSubmit={handleLogin}>
             <label className="signin-label">Corporate Email</label>
             <div className="field">
-<<<<<<< HEAD
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#4a4a46]">
-=======
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#71717A]">
->>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
                 <rect x="2" y="4" width="20" height="16" rx="2" />
                 <path d="M22 6l-10 7L2 6" />
               </svg>
@@ -74,11 +70,7 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
 
             <label className="signin-label">Master Key / Password</label>
             <div className="field">
-<<<<<<< HEAD
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#4a4a46]">
-=======
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[#71717A]">
->>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
                 <rect x="4" y="10" width="16" height="10" rx="2" />
                 <path d="M8 10V7a4 4 0 0 1 8 0v3" />
               </svg>
@@ -101,11 +93,7 @@ export function LandingHero({ onOpenLogin, onNavigateDashboard, onLoginSuccess }
             <button 
               type="button"
               onClick={onNavigateDashboard}
-<<<<<<< HEAD
-              className="underline cursor-pointer font-bold text-[#111111] border-none bg-transparent p-0"
-=======
               className="underline cursor-pointer font-bold text-[#18181B] border-none bg-transparent p-0"
->>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
             >
               Try interactive demo
             </button>

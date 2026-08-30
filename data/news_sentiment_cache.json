@@ -1,9 +1,5 @@
 {
-<<<<<<< HEAD
   "generated_at": "2026-08-30T08:09:11Z",
-=======
-  "generated_at": "2026-08-30T07:37:30Z",
->>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
   "currencies": {
     "EUR": {
       "raw": {
@@ -44,7 +40,6 @@
     "USD": {
       "raw": {
         "sentiment_score": -0.2,
-<<<<<<< HEAD
         "volatility_multiplier": 1.1,
         "drift_bias_bps": -2.0,
         "confidence": 0.7
@@ -52,15 +47,6 @@
       "effective": {
         "drift_bias_bps": -1.4,
         "volatility_multiplier": 1.07
-=======
-        "volatility_multiplier": 1.2,
-        "drift_bias_bps": -2.5,
-        "confidence": 0.7
-      },
-      "effective": {
-        "drift_bias_bps": -1.75,
-        "volatility_multiplier": 1.14
->>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
       },
       "headline_count": 12,
       "headlines": [
