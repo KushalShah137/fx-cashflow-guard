@@ -165,7 +165,7 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F9F8F5] text-[#18181B] flex flex-col font-mono selection:bg-[#18181B] selection:text-[#F9F8F5]">
+    <div className="min-h-screen bg-[#F6F4EE] text-[#18181B] flex flex-col font-mono selection:bg-[#18181B] selection:text-[#F6F4EE]">
       {/* Top Editorial Financial Terminal Navigation Bar */}
       <header className="nav">
         <div className="nav-left">

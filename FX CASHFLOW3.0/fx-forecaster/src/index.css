@@ -79,7 +79,7 @@
 
 /* Custom styles from mockup */
 :root {
-  --paper: #f2f1ec;
+  --paper: #F6F4EE;
   --ink: #111111;
   --ink-soft: #4a4a46;
   --line: #d8d6cd;
@@ -93,24 +93,9 @@
 }
 
 body {
-  background-color: var(--paper) !important;
-  background-image:
-    linear-gradient(rgba(216,214,205,0.55) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(216,214,205,0.55) 1px, transparent 1px) !important;
-  background-size: 44px 44px !important;
-  background-position: -1px -1px !important;
+  background-color: #F6F4EE !important;
+  background-image: none !important;
   position: relative;
-}
-
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: multiply;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
 }
 
 /* ---------- NAV ---------- */
