@@ -45,6 +45,7 @@ logs/
 # ---------- Misc ----------
 .cache/
 coverage/
-*.tmp
+# ---------- Data & Caches ----------
 *.db
 data/*.db
+data/news_sentiment_cache.json
