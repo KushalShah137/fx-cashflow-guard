@@ -79,25 +79,55 @@
 
 /* Custom styles from mockup */
 :root {
+<<<<<<< HEAD
   --paper: #F6F4EE;
   --ink: #111111;
   --ink-soft: #4a4a46;
   --line: #d8d6cd;
+=======
+  --paper: #F4F1EA;
+  --ink: #18181B;
+  --ink-soft: #71717A;
+  --line: #E4E2D9;
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
   --nav-bg: #0b0b0c;
   --nav-line: #232324;
-  --green: #2fae66;
-  --red: #c1443a;
+  --green: #047857;
+  --red: #B91C1C;
   --copper-1: #b5652f;
   --copper-2: #e8a05a;
   --copper-3: #5c3113;
 }
 
 body {
+<<<<<<< HEAD
   background-color: #F6F4EE !important;
   background-image: none !important;
   position: relative;
 }
 
+=======
+  background-color: var(--paper) !important;
+  background-image:
+    linear-gradient(rgba(228,226,217,0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(228,226,217,0.3) 1px, transparent 1px) !important;
+  background-size: 44px 44px !important;
+  background-position: -1px -1px !important;
+  position: relative;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.03;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
 /* ---------- NAV ---------- */
 header.nav {
   background: var(--nav-bg);
@@ -167,7 +197,11 @@ header.nav {
 main.hero {
   position: relative;
   min-height: calc(100vh - 80px);
+<<<<<<< HEAD
   padding: 40px 5vw;
+=======
+  padding: 40px 6vw;
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -184,6 +218,7 @@ main.hero {
 .hero-text {
   position: relative;
   z-index: 5;
+<<<<<<< HEAD
   max-width: 720px;
 }
 h1.hero-title {
@@ -192,40 +227,52 @@ h1.hero-title {
   font-size: clamp(34px, 4.4vw, 60px);
   line-height: 1.05;
   letter-spacing: -1.2px;
+=======
+  max-width: 680px;
+}
+h1.hero-title {
+  font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  font-size: clamp(34px, 4.5vw, 58px);
+  line-height: 1.06;
+  letter-spacing: -1.4px;
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
   margin: 0 0 34px 0;
+  color: #18181B;
 }
 .cta-row {
-  display: flex; gap: 14px; margin-top: 44px; flex-wrap: wrap;
+  display: flex; gap: 14px; margin-top: 36px; flex-wrap: wrap;
 }
 .btn {
-  font-size: 14px;
-  padding: 16px 22px;
+  font-size: 13.5px;
+  padding: 15px 22px;
   border-radius: 8px;
   display: inline-flex; align-items: center; gap: 10px;
   cursor: pointer;
   border: 1px solid transparent;
   transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
 }
-.btn:hover { transform: translateY(-2px); }
+.btn:hover { transform: translateY(-1px); }
 .btn:active { transform: translateY(0px); }
 .btn-dark {
-  background: var(--ink); color: var(--paper);
+  background: #18181B; color: #FAF9F5;
 }
-.btn-dark:hover { background: #000; box-shadow: 0 10px 24px -12px rgba(0,0,0,0.45); }
+.btn-dark:hover { background: #000; box-shadow: 0 8px 20px -10px rgba(0,0,0,0.3); }
 .btn-light {
-  background: var(--paper);
-  border: 1px solid #b9b7ac;
-  color: var(--ink);
+  background: #FAF9F5;
+  border: 1px solid #DCD9CE;
+  color: #18181B;
 }
-.btn-light:hover { background: #e9e7de; box-shadow: 0 10px 22px -14px rgba(0,0,0,0.2); }
+.btn-light:hover { background: #F4F1EA; border-color: #18181B; }
 .btn:focus-visible, .field input:focus-visible, .signin-submit:focus-visible {
-  outline: 2px solid #7a7668; outline-offset: 2px;
+  outline: 2px solid #18181B; outline-offset: 2px;
 }
 
 /* ---------- SIGN IN CARD ---------- */
 .signin-card {
   position: relative;
   z-index: 5;
+<<<<<<< HEAD
   background: rgba(242,241,236,0.96);
   border: 1px solid #c9c7bc;
   border-radius: 14px;
@@ -239,60 +286,84 @@ h1.hero-title {
 .signin-card:hover {
   border-color: #a8a69a;
   box-shadow: 0 24px 60px -18px rgba(0,0,0,0.15);
+=======
+  background: #FAF9F5;
+  border: 1px solid #DCD9CE;
+  border-radius: 16px;
+  padding: 32px;
+  width: 380px;
+  flex-shrink: 0;
+  box-shadow: 0 16px 40px -16px rgba(0,0,0,0.07);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.signin-card:hover {
+  border-color: #18181B;
+  box-shadow: 0 20px 48px -16px rgba(0,0,0,0.1);
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
 }
 .signin-card h2 {
-  font-family: "Helvetica Neue",Arial,sans-serif;
-  font-weight: 800;
-  font-size: 26px;
-  margin: 0 0 10px 0;
-  letter-spacing: -.5px;
+  font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  margin: 0 0 8px 0;
+  letter-spacing: -.6px;
+  color: #18181B;
 }
 .signin-card p.sub {
-  color: var(--ink-soft);
-  font-size: 13.5px;
-  line-height: 1.5;
-  margin: 0 0 26px 0;
+  color: #71717A;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0 0 24px 0;
 }
 label.signin-label {
+<<<<<<< HEAD
   display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--ink);
+=======
+  display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; color: #18181B;
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
 }
 .field {
-  display: flex; align-items: center; gap: 9px;
-  background: #fff;
-  border: 1px solid #c9c7bc;
+  display: flex; align-items: center; gap: 10px;
+  background: #FFFFFF;
+  border: 1px solid #E4E2D9;
   border-radius: 8px;
-  padding: 12px 14px;
-  margin-bottom: 20px;
+  padding: 11px 14px;
+  margin-bottom: 18px;
   font-size: 14px;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .field:focus-within {
-  border-color: #8a8878;
-  box-shadow: 0 0 0 3px rgba(138,136,120,0.15);
+  border-color: #18181B;
+  box-shadow: 0 0 0 2px rgba(24,24,27,0.1);
 }
 .field input {
   border: none; outline: none; background: transparent;
-  font-family: inherit; font-size: 14px; width: 100%; color: var(--ink);
+  font-family: inherit; font-size: 13.5px; width: 100%; color: #18181B;
 }
-.field svg { flex-shrink: 0; opacity: .6; }
+.field svg { flex-shrink: 0; opacity: .7; }
 .signin-submit {
   width: 100%;
-  background: var(--ink); color: var(--paper);
+  background: #18181B; color: #FAF9F5;
   border: none; border-radius: 8px;
-  padding: 15px; font-size: 14px;
-  display: flex; align-items: center; justify-content: center; gap: 9px;
-  cursor: pointer; margin-top: 4px;
+  padding: 14px; font-size: 13.5px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  cursor: pointer; margin-top: 6px;
+  transition: background .15s ease;
 }
 .signin-submit:hover { background: #000; }
 .demo-link {
-  text-align: center; font-size: 13px; color: var(--ink-soft);
+  text-align: center; font-size: 12.5px; color: #71717A;
   margin-top: 18px;
 }
+<<<<<<< HEAD
 .demo-link button { text-decoration: underline; color: var(--ink); }
+=======
+.demo-link button { text-decoration: underline; color: #18181B; }
+>>>>>>> e52636e7bdd5aab167bdf11d78c590d4c59ba74b
 
 /* ---------- FOOTER CAPTION ---------- */
 .footnote {
-  text-align: center; font-size: 12px; color: #8b897f; padding: 20px 5vw 60px;
+  text-align: center; font-size: 12px; color: #71717A; padding: 24px 5vw 40px;
   position: relative; z-index: 5;
 }
 
