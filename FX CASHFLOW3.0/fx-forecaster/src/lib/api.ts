@@ -337,10 +337,30 @@ export async function fetchTransactions(): Promise<Transaction[]> {
 export async function fetchMarketSentiment(): Promise<MarketSentiment> {
   try {
     const res = await fetch(`${API_BASE}/api/market-sentiment`, {
-      signal: AbortSignal.timeout(3000),
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache, no-store, must-revalidate" },
+      signal: AbortSignal.timeout(5000),
     })
     if (res.ok) {
-      return await res.json()
+      const data: MarketSentiment = await res.json()
+      if (!data.currencies || Object.keys(data.currencies).length === 0) {
+        try {
+          const rawRes = await fetch(`${API_BASE}/news-sentiment`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(3000),
+          })
+          if (rawRes.ok) {
+            const rawData = await rawRes.json()
+            if (rawData.currencies) {
+              data.currencies = rawData.currencies
+            }
+            if (rawData.generated_at) {
+              data.last_updated = rawData.generated_at
+            }
+          }
+        } catch (_err) {}
+      }
+      return data
     }
   } catch (_e) {
     // Graceful fallback
@@ -357,6 +377,23 @@ export async function fetchMarketSentiment(): Promise<MarketSentiment> {
       "RBI maintains strategic foreign exchange intervention corridor",
     ],
   }
+}
+
+export async function refreshMarketSentiment(): Promise<MarketSentiment> {
+  try {
+    const res = await fetch(`${API_BASE}/refresh-news`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache, no-store, must-revalidate" },
+      signal: AbortSignal.timeout(45000),
+    })
+    if (res.ok) {
+      return await fetchMarketSentiment()
+    }
+  } catch (_e) {
+    // Fallback to fetch current
+  }
+  return fetchMarketSentiment()
 }
 
 export async function fetchBalances(): Promise<WalletBalances> {

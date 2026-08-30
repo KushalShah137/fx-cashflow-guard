@@ -1,15 +1,15 @@
 {
-  "generated_at": "2026-08-30T20:00:26Z",
+  "generated_at": "2026-08-30T21:15:58Z",
   "currencies": {
     "EUR": {
       "raw": {
         "sentiment_score": 0.2,
         "volatility_multiplier": 1.0,
-        "drift_bias_bps": 1.5,
+        "drift_bias_bps": 0.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": 1.05,
+        "drift_bias_bps": 0.35,
         "volatility_multiplier": 1.0
       },
       "headline_count": 2,
@@ -48,9 +48,8 @@
         "drift_bias_bps": -1.75,
         "volatility_multiplier": 1.14
       },
-      "headline_count": 16,
+      "headline_count": 14,
       "headlines": [
-        "investingLive Americas FX news wrap 28 Aug",
         "US Treasury's Bessent faces G20 diplomacy test amid tariffs, Iran war, bond turmoil - Reuters",
         "Trump criticizes NBC over election comment as Treasury denies some NYT, WSJ and Bloomberg reporters G20 credentials",
         "Gulf stocks fall as Fed rate-hike bets rise after Warsh remarks - Reuters",
@@ -64,21 +63,20 @@
         "Nepal flash floods: Reconstruction costs could run into billions, says finance minister",
         "US-hosted G20 finance meeting to target growth, imbalances, Iran sanctions, Treasury official says - Reuters",
         "What Warsh will say and how the market will react, according to prediction markets",
-        "Kansas City Fed's Schmid says inflation 'stubborn' and 'sticky,' policy rate not restrictive",
-        "Bessent, Warsh diverge on who should set the price of money - Reuters"
+        "Kansas City Fed's Schmid says inflation 'stubborn' and 'sticky,' policy rate not restrictive"
       ],
       "source": "live"
     },
     "INR": {
       "raw": {
         "sentiment_score": -0.2,
-        "volatility_multiplier": 1.1,
+        "volatility_multiplier": 1.05,
         "drift_bias_bps": -2.0,
-        "confidence": 0.7
+        "confidence": 0.75
       },
       "effective": {
-        "drift_bias_bps": -1.4,
-        "volatility_multiplier": 1.07
+        "drift_bias_bps": -1.5,
+        "volatility_multiplier": 1.0375
       },
       "headline_count": 4,
       "headlines": [
@@ -91,19 +89,20 @@
     },
     "CNY": {
       "raw": {
-        "sentiment_score": -0.3,
+        "sentiment_score": -0.2,
         "volatility_multiplier": 1.1,
-        "drift_bias_bps": -2.5,
+        "drift_bias_bps": -2.0,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.75,
+        "drift_bias_bps": -1.4,
         "volatility_multiplier": 1.07
       },
-      "headline_count": 2,
+      "headline_count": 3,
       "headlines": [
-        "Pernod warns weak US, China will weigh in years to come - Reuters",
-        "OPEC+ loses oil market sway in Iran war as China gains influence - Reuters"
+        "Economic and event calendar in Asia 31 August 2026 - China official PMIs",
+        "China Eastern posts wider first-half net loss - Reuters",
+        "Air China H1 net loss widens to about $341 million, filing shows - Reuters"
       ],
       "source": "live"
     },
@@ -128,21 +127,20 @@
     },
     "AUD": {
       "raw": {
-        "sentiment_score": -0.15,
+        "sentiment_score": -0.1,
         "volatility_multiplier": 1.05,
         "drift_bias_bps": -1.5,
-        "confidence": 0.75
+        "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.125,
-        "volatility_multiplier": 1.0375
+        "drift_bias_bps": -1.05,
+        "volatility_multiplier": 1.035
       },
-      "headline_count": 4,
+      "headline_count": 3,
       "headlines": [
         "Turkey, Saudi Arabia, Pakistan to hold first defence pact meeting, source says - Reuters",
         "OpenAI hires Meta executive to lead Southeast Asia, Australia",
-        "Virgin Australia to trim domestic capacity in line with Qantas, expects revenue gains - Reuters",
-        "Greek-operated air defence system shoots down drones over Saudi - Reuters"
+        "Virgin Australia to trim domestic capacity in line with Qantas, expects revenue gains - Reuters"
       ],
       "source": "live"
     }

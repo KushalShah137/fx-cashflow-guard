@@ -256,7 +256,7 @@ class CashFlowEngine:
 
         transactions_list = []
         try:
-            from backend.db import init_db, get_db_connection
+            from backend.database.legacy_sqlite import init_db, get_db_connection
             init_db()  # Ensures tables exist and are seeded
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -571,7 +571,7 @@ class CashFlowEngine:
                 self.transactions[i] = updated
                 logger.info("Transaction %s marked as SETTLED", transaction_id)
                 try:
-                    from backend.db import update_transaction_in_db
+                    from backend.database.legacy_sqlite import update_transaction_in_db
                     update_transaction_in_db(updated)
                 except Exception as e:
                     logger.warning("Failed to persist transaction settlement to SQLite: %s", e)
@@ -595,7 +595,7 @@ class CashFlowEngine:
 
         # Step: Call Wise Sandbox API (graceful fallback on any error/timeout/missing keys)
         try:
-            from backend.wise_api import execute_wise_action
+            from backend.integrations.wise import execute_wise_action
             wise_result = execute_wise_action(
                 action=action_norm,
                 currency=tx.currency,
@@ -626,7 +626,7 @@ class CashFlowEngine:
             self.transactions[idx] = updated
             logger.info("Transaction %s: applied 'convert_and_hold'", transaction_id)
             try:
-                from backend.db import update_transaction_in_db
+                from backend.database.legacy_sqlite import update_transaction_in_db
                 update_transaction_in_db(updated)
             except Exception as e:
                 logger.warning("Failed to persist action update to SQLite: %s", e)
@@ -649,7 +649,7 @@ class CashFlowEngine:
             self.transactions[idx] = updated
             logger.info("Transaction %s: applied 'settle_now'", transaction_id)
             try:
-                from backend.db import update_transaction_in_db
+                from backend.database.legacy_sqlite import update_transaction_in_db
                 update_transaction_in_db(updated)
             except Exception as e:
                 logger.warning("Failed to persist action update to SQLite: %s", e)

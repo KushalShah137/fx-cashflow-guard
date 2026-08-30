@@ -15,6 +15,8 @@ import {
 
 interface LiveNewsFeedProps {
   sentiment: MarketSentiment | null
+  onRefreshNews?: () => void
+  isRefreshing?: boolean
 }
 
 interface NewsCardItem {
@@ -30,147 +32,121 @@ interface NewsCardItem {
 }
 
 // --------------------------------------------------------------------------- //
-// Helper: Map keywords to currency & sentiment characteristics
+// Helper: Extract Qwen LLM real sentiment metrics from backend API payload
 // --------------------------------------------------------------------------- //
-function analyzeHeadline(headline: string, globalSentiment: MarketSentiment | null): NewsCardItem {
-  const text = headline.toLowerCase()
-  let currency = "USD"
-  if (/ecb|euro|lagarde|france|germany/i.test(text)) currency = "EUR"
-  else if (/boe|bank of england|bailey|pound|sterling|uk|britain/i.test(text)) currency = "GBP"
-  else if (/rbi|rupee|india|nifty|sensex|delhi|mumbai/i.test(text)) currency = "INR"
-  else if (/pboc|yuan|cny|china|beijing/i.test(text)) currency = "CNY"
-  else if (/boj|yen|jpy|japan|tokyo/i.test(text)) currency = "JPY"
-  else if (/rba|aussie|aud|australia/i.test(text)) currency = "AUD"
+function buildNewsCardItems(sentiment: MarketSentiment | null): NewsCardItem[] {
+  const timestamp = sentiment?.last_updated
+    ? new Date(sentiment.last_updated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "Live"
 
-  // Check sentiment polarity
-  const isPositive = /hike|gain|surge|rise|warm up|resilient|boost|jump|support|record high|bullish/i.test(text)
-  const isNegative = /pressure|crash|inflation|risk|down|lower|fall|drop|weak|debt|concern|tight|threat|losses/i.test(text)
+  // 1. Primary: Extract directly from backend per-currency pipeline
+  if (sentiment?.currencies && Object.keys(sentiment.currencies).length > 0) {
+    const items: NewsCardItem[] = []
+    for (const [ccy, cinfo] of Object.entries(sentiment.currencies)) {
+      if (!cinfo.headlines || cinfo.headlines.length === 0) continue
+      const raw = cinfo.raw
+      const eff = cinfo.effective
+      const sentimentLabel: "bullish" | "bearish" | "neutral" =
+        raw.sentiment_score > 0.05 ? "bullish" : raw.sentiment_score < -0.05 ? "bearish" : "neutral"
 
-  let sentimentScore = 0.0
-  let sentimentLabel: "bullish" | "bearish" | "neutral" = "neutral"
-  let driftBps = 0.0
-  let volatilityMultiplier = 1.0
-
-  if (isPositive && !isNegative) {
-    sentimentScore = 0.25
-    sentimentLabel = "bullish"
-    driftBps = 1.75
-    volatilityMultiplier = 0.92
-  } else if (isNegative && !isPositive) {
-    sentimentScore = -0.35
-    sentimentLabel = "bearish"
-    driftBps = -2.2
-    volatilityMultiplier = 1.18
-  } else {
-    sentimentScore = 0.0
-    sentimentLabel = "neutral"
-    driftBps = 0.0
-    volatilityMultiplier = 1.0
+      for (const h of cinfo.headlines) {
+        items.push({
+          id: `hl-${ccy}-${Math.abs(h.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))}`,
+          headline: h,
+          currency: ccy,
+          sentimentScore: raw.sentiment_score,
+          sentimentLabel,
+          driftBps: eff.drift_bias_bps,
+          volatilityMultiplier: eff.volatility_multiplier,
+          source: cinfo.source === "live" ? "live" : "fallback",
+          timestamp,
+        })
+      }
+    }
+    if (items.length > 0) return items
   }
 
-  return {
-    id: `hl-${Math.abs(headline.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))}`,
-    headline,
-    currency,
-    sentimentScore,
-    sentimentLabel,
-    driftBps,
-    volatilityMultiplier,
-    source: globalSentiment ? "live" : "fallback",
-    timestamp: globalSentiment?.last_updated
-      ? new Date(globalSentiment.last_updated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-      : "Live",
+  // 2. Global sentiment fallback directly from backend payload
+  const headlines = sentiment?.headlines || []
+  if (headlines.length > 0) {
+    const driftBps = Number(((sentiment?.drift_adjustment || 0) * 100).toFixed(1))
+    const volMultiplier = Number((1 + (sentiment?.volatility_adjustment || 0)).toFixed(2))
+    const sentimentScore = sentiment?.drift_adjustment || 0
+    const sentimentLabel: "bullish" | "bearish" | "neutral" =
+      sentimentScore > 0 ? "bullish" : sentimentScore < 0 ? "bearish" : "neutral"
+
+    return headlines.map((h) => ({
+      id: `hl-${Math.abs(h.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))}`,
+      headline: h,
+      currency: "MACRO",
+      sentimentScore,
+      sentimentLabel,
+      driftBps,
+      volatilityMultiplier: volMultiplier,
+      source: "live",
+      timestamp,
+    }))
   }
+
+  return []
 }
 
 // --------------------------------------------------------------------------- //
-// Helper: Generate Quantitative Regime Synthesis Sentence
+// Helper: Generate Quantitative Regime Synthesis Sentence using real Qwen LLM data
 // --------------------------------------------------------------------------- //
 function generateRegimeSynthesis(sentiment: MarketSentiment | null): { currency: string; text: string; badge: string; isLive: boolean }[] {
-  if (!sentiment || !sentiment.headlines || sentiment.headlines.length === 0) {
-    return [
-      {
-        currency: "ALL",
-        text: "No significant market-moving news detected in the current cycle — using historical baseline volatility.",
-        badge: "BASELINE",
-        isLive: false,
-      },
-    ]
-  }
+  if (sentiment?.currencies && Object.keys(sentiment.currencies).length > 0) {
+    const syntheses: { currency: string; text: string; badge: string; isLive: boolean }[] = []
+    for (const [ccy, cinfo] of Object.entries(sentiment.currencies)) {
+      if (!cinfo.headlines || cinfo.headlines.length === 0) continue
+      const eff = cinfo.effective
+      const raw = cinfo.raw
+      const driftText = eff.drift_bias_bps >= 0 ? `+${eff.drift_bias_bps.toFixed(1)} bps` : `${eff.drift_bias_bps.toFixed(1)} bps`
+      const volText = `${eff.volatility_multiplier.toFixed(2)}x`
+      const badge = raw.sentiment_score > 0.05 ? "BULLISH" : raw.sentiment_score < -0.05 ? "BEARISH" : "NEUTRAL"
 
-  const syntheses: { currency: string; text: string; badge: string; isLive: boolean }[] = []
+      const stance = raw.sentiment_score > 0.05
+        ? `Qwen 2.5 LLM analyzes Finnhub headlines as constructive (score: +${raw.sentiment_score.toFixed(2)})`
+        : raw.sentiment_score < -0.05
+        ? `Qwen 2.5 LLM analyzes Finnhub headlines as defensive (score: ${raw.sentiment_score.toFixed(2)})`
+        : `Qwen 2.5 LLM analyzes Finnhub headlines as neutral (score: 0.00)`
 
-  // Analyze distinct currencies represented in headlines
-  const seenCurrencies = new Set<string>()
-  for (const h of sentiment.headlines) {
-    const item = analyzeHeadline(h, sentiment)
-    if (!seenCurrencies.has(item.currency)) {
-      seenCurrencies.add(item.currency)
-
-      let qualitativeWord = "neutral"
-      let stanceDescription = "Macro conditions remain balanced"
-
-      if (item.sentimentScore > 0.2) {
-        qualitativeWord = "constructive (+0.25)"
-        stanceDescription = `Recent monetary commentary suggests tightening resilience, lifting ${item.currency} sentiment`
-      } else if (item.sentimentScore < -0.2) {
-        qualitativeWord = "defensive (-0.35)"
-        stanceDescription = `Inflation stickiness and external pressures push ${item.currency} sentiment cautious`
-      } else {
-        qualitativeWord = "neutral (0.00)"
-        stanceDescription = `Balanced trade flows and steady central bank policy keep ${item.currency} stable`
-      }
-
-      const driftText = item.driftBps >= 0 ? `+${item.driftBps.toFixed(1)} bps` : `${item.driftBps.toFixed(1)} bps`
-      const volText = `${item.volatilityMultiplier.toFixed(2)}x`
-
-      const text = `${stanceDescription} (${qualitativeWord}). Reflected in the forecast as a ${driftText} drift and ${volText} volatility multiplier on ${item.currency}-denominated cash flows over the next 5 days.`
+      const text = `${stance}. Reflected in forecast as ${driftText} drift bias and ${volText} volatility multiplier across ${cinfo.headline_count} headlines.`
 
       syntheses.push({
-        currency: item.currency,
+        currency: ccy,
         text,
-        badge: item.sentimentLabel.toUpperCase(),
-        isLive: true,
+        badge,
+        isLive: cinfo.source === "live",
       })
     }
+    if (syntheses.length > 0) return syntheses
   }
 
-  if (syntheses.length === 0) {
-    syntheses.push({
+  return [
+    {
       currency: "MACRO",
       text: "No significant market-moving news detected in the current cycle — using historical baseline volatility.",
-      badge: "NEUTRAL",
+      badge: "BASELINE",
       isLive: false,
-    })
-  }
-
-  return syntheses
+    },
+  ]
 }
 
 // --------------------------------------------------------------------------- //
 // Component: LiveNewsFeed
 // --------------------------------------------------------------------------- //
-export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
-  const rawHeadlines = sentiment?.headlines || [
-    "ECB saw a further hike as likely at July meeting - Reuters",
-    "Stock traders warm up to Warsh as volatility index touches year-to-date low",
-    "Bank of England's Bailey sees 'subdued' second-round inflation effects for now - Reuters",
-    "US Fed signals higher-for-longer policy trajectory amid sticky inflation",
-    "RBI maintains strategic foreign exchange intervention corridor",
-  ]
-
-  // Prepared news items
-  const cardItems = useMemo(() => {
-    return rawHeadlines.map((h) => analyzeHeadline(h, sentiment))
-  }, [rawHeadlines, sentiment])
+export function LiveNewsFeed({ sentiment, onRefreshNews, isRefreshing }: LiveNewsFeedProps) {
+  // Prepared news items directly from backend sentiment payload
+  const cardItems = useMemo(() => buildNewsCardItems(sentiment), [sentiment])
 
   // Stack index tracks active top card
   const [currentIndex, setCurrentIndex] = useState(0)
 
-  // Reset when new headlines arrive
+  // Reset when fresh sentiment data arrives from backend
   useEffect(() => {
     setCurrentIndex(0)
-  }, [rawHeadlines.length])
+  }, [sentiment?.last_updated])
 
   const handleNext = () => {
     if (currentIndex < cardItems.length) {
@@ -205,7 +181,17 @@ export function LiveNewsFeed({ sentiment }: LiveNewsFeedProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onRefreshNews && (
+            <button
+              onClick={onRefreshNews}
+              disabled={isRefreshing}
+              className="flex items-center gap-1.5 text-[11px] font-bold text-[#18181B] bg-[#FFFFFF] hover:bg-[#F4F3EE] active:scale-95 border border-[#E4E2D9] px-2.5 py-1 rounded transition-all shadow-sm disabled:opacity-50"
+            >
+              <RotateCcw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
+              <span>{isRefreshing ? "FETCHING FINNHUB..." : "REFRESH FINNHUB NEWS"}</span>
+            </button>
+          )}
           <span className="flex items-center gap-1.5 text-[11px] font-bold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-1 rounded-sm">
             <Radio className="w-3 h-3 animate-pulse" />
             FINNHUB • QWEN 2.5 ACTIVE

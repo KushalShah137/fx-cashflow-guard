@@ -26,8 +26,8 @@ from datetime import date
 from enum import Enum
 from typing import List, Dict, Any, Optional
 
-from backend.cash_flow_engine import CashFlowEngine, FlowDirection, TransactionStatus, Transaction
-from backend.risk_classifier import RiskClassifier
+from backend.engines.cash_flow import CashFlowEngine, FlowDirection, TransactionStatus, Transaction
+from backend.engines.risk_classifier import RiskClassifier
 
 # --------------------------------------------------------------------------- #
 # Logging
@@ -243,7 +243,7 @@ class DecisionEngine:
                     reason_codes.append("LIQUIDITY_BUFFER_WARNING")
 
             # Calculate economic impact
-            from backend.economic_impact_engine import EconomicImpactEngine
+            from backend.engines.economic_impact import EconomicImpactEngine
             impact_eng = EconomicImpactEngine()
             impact = impact_eng.calculate_impact(
                 amount_base=amount_base,

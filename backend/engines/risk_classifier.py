@@ -26,7 +26,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import date
 from typing import Dict, Any, List, Optional, Union
 
-from backend.cash_flow_engine import CashFlowEngine, FlowDirection
+from backend.engines.cash_flow import CashFlowEngine, FlowDirection
 
 # --------------------------------------------------------------------------- #
 # Logging

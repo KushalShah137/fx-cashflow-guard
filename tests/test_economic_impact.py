@@ -1,6 +1,6 @@
 import unittest
 import math
-from backend.economic_impact_engine import EconomicImpactEngine
+from backend.engines.economic_impact import EconomicImpactEngine
 
 
 class TestEconomicImpactEngine(unittest.TestCase):

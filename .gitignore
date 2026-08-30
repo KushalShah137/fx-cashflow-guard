@@ -47,5 +47,9 @@ logs/
 coverage/
 # ---------- Data & Caches ----------
 *.db
+*.db-wal
+*.db-shm
 data/*.db
 data/news_sentiment_cache.json
+.vite/
+**/.vite/

@@ -7,9 +7,9 @@ import json
 import unittest
 from datetime import date
 
-from backend.cash_flow_engine import CashFlowEngine, FlowDirection, TransactionStatus
-from backend.risk_classifier import RiskClassifier
-from backend.decision_engine import DecisionEngine, DecisionPolicy, ActionType, ActionPriority
+from backend.engines.cash_flow import CashFlowEngine, FlowDirection, TransactionStatus
+from backend.engines.risk_classifier import RiskClassifier
+from backend.engines.decision_engine import DecisionEngine, DecisionPolicy, ActionType, ActionPriority
 
 class TestDecisionEngine(unittest.TestCase):
 

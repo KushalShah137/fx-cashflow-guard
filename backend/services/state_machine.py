@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
-from backend.db import get_db_connection
+from backend.database.legacy_sqlite import get_db_connection
 
 logger = logging.getLogger("state_machine")
 if not logger.handlers:

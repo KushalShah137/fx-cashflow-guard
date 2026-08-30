@@ -15,9 +15,9 @@ from typing import Optional, Dict, Any, List
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from backend.cash_flow_engine import CashFlowEngine, FlowDirection, TransactionStatus
-from backend.risk_model_v2 import get_risk_band as get_risk_band_v2, DEFAULT_START_DATE
-from backend.fx_data_fetcher import compute_volatility_metrics
+from backend.engines.cash_flow import CashFlowEngine, FlowDirection, TransactionStatus
+from backend.engines.risk_model import get_risk_band as get_risk_band_v2, DEFAULT_START_DATE
+from backend.integrations.fx_data_fetcher import compute_volatility_metrics
 
 logger = logging.getLogger("visualization")
 if not logger.handlers:
@@ -97,7 +97,7 @@ def add_risk_bands_trace(
     row: int = 1,
     col: int = 1,
 ) -> None:
-    from backend.risk_model_v2 import NEWS_CACHE_PATH, load_news_sentiment_cache
+    from backend.engines.risk_model import NEWS_CACHE_PATH, load_news_sentiment_cache
     news_adj = load_news_sentiment_cache(NEWS_CACHE_PATH)
     band_points = get_risk_band_v2(engine=engine, days=days, n_simulations=1000, seed=42, news_adjustments=news_adj)
     dates = [p["date"] for p in band_points]

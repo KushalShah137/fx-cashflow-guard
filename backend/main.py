@@ -14,17 +14,17 @@ from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.cash_flow_engine import CashFlowEngine
-from backend.risk_model_v2 import (
+from backend.engines.cash_flow import CashFlowEngine
+from backend.engines.risk_model import (
     get_risk_band as get_risk_band_v2,
     run_monte_carlo_forecast_v2,
     get_model_diagnostics,
     DEFAULT_START_DATE,
 )
-from backend.risk_classifier import RiskClassifier
-from backend.decision_engine import DecisionEngine
-from backend.response_models import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
-from backend.news_sentiment import refresh_news_cache, run_background_refresh
+from backend.engines.risk_classifier import RiskClassifier
+from backend.engines.decision_engine import DecisionEngine
+from backend.models.schemas import RiskClassificationResponse, DecisionResponse, RecommendationLifecycleSchema
+from backend.services.news_sentiment import refresh_news_cache, run_background_refresh
 
 logger = logging.getLogger("main")
 
@@ -74,7 +74,7 @@ def startup_news_refresh():
 
 
 def save_and_enrich_recommendations(decisions: dict) -> dict:
-    from backend.state_machine import create_or_update_recommendation
+    from backend.services.state_machine import create_or_update_recommendation
     enriched_recs = []
     for r in decisions.get("recommendations", []):
         impact = r.get("expected_impact", {}) or {}
@@ -107,7 +107,7 @@ def get_engine(reload: bool = False) -> CashFlowEngine:
     global _engine_instance
     if _engine_instance is None or reload:
         if reload:
-            from backend.db import init_db
+            from backend.database.legacy_sqlite import init_db
             init_db(force=True)
         _engine_instance = CashFlowEngine.from_file(DATA_PATH)
     return _engine_instance
@@ -755,7 +755,7 @@ def apply_action(
             settle_date=DEFAULT_START_DATE,
         )
         # Sync state machine SQLite DB so GET /actions reflects execution
-        from backend.state_machine import sync_action_for_transaction
+        from backend.services.state_machine import sync_action_for_transaction
         sync_action_for_transaction(req.transaction_id, req.action)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -768,7 +768,7 @@ def apply_action(
 def reset_demo():
     """Reset both the in-memory engine state and the SQLite database tables back to the original dataset."""
     get_engine(reload=True)
-    from backend.db import init_db
+    from backend.database.legacy_sqlite import init_db
     init_db(force=True)
     return {"status": "reset_successful"}
 
@@ -943,7 +943,7 @@ def get_decisions(
 @app.get("/netting-opportunities")
 def get_netting_opportunities():
     """Calculates multilateral same-currency netting opportunities across transactions."""
-    from backend.netting_engine import NettingEngine
+    from backend.engines.netting_engine import NettingEngine
     engine = get_engine()
     netting_eng = NettingEngine()
     return netting_eng.calculate_netting(
@@ -956,8 +956,8 @@ def get_netting_opportunities():
 @app.get("/economic-impact")
 def get_economic_impact():
     """Calculates economic value preservation and avoided cost of inaction."""
-    from backend.economic_impact_engine import EconomicImpactEngine
-    from backend.netting_engine import NettingEngine
+    from backend.engines.economic_impact import EconomicImpactEngine
+    from backend.engines.netting_engine import NettingEngine
     engine = get_engine()
     impact_eng = EconomicImpactEngine()
     
@@ -1000,13 +1000,13 @@ from typing import List
 
 @app.get("/actions", response_model=List[RecommendationLifecycleSchema])
 def list_actions():
-    from backend.state_machine import get_all_recommendations
+    from backend.services.state_machine import get_all_recommendations
     return get_all_recommendations()
 
 
 @app.get("/actions/{action_id}", response_model=RecommendationLifecycleSchema)
 def get_action(action_id: str):
-    from backend.state_machine import get_recommendation_by_id
+    from backend.services.state_machine import get_recommendation_by_id
     action = get_recommendation_by_id(action_id)
     if not action:
         raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
@@ -1015,7 +1015,7 @@ def get_action(action_id: str):
 
 @app.post("/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
 def approve_action(action_id: str):
-    from backend.state_machine import transition_recommendation_status, LifecycleError
+    from backend.services.state_machine import transition_recommendation_status, LifecycleError
     try:
         updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
         return updated
@@ -1027,7 +1027,7 @@ def approve_action(action_id: str):
 
 @app.post("/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
 def reject_action(action_id: str):
-    from backend.state_machine import transition_recommendation_status, LifecycleError
+    from backend.services.state_machine import transition_recommendation_status, LifecycleError
     try:
         updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
         return updated
@@ -1044,7 +1044,7 @@ def execute_action(action_id: str):
     Transitions status: APPROVED -> EXECUTING -> EXECUTED, and executes the hedge/settlement
     on the in-memory engine and SQLite database.
     """
-    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
+    from backend.services.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
     rec = get_recommendation_by_id(action_id)
     if not rec:
         raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
@@ -1086,8 +1086,8 @@ def demo_script_check():
     Pre-demo diagnostic health check:
     Confirms SQLite DB, FX 2-year history cache, Wise fallback, and initial demo transactions.
     """
-    from backend.db import DB_PATH, get_db_connection
-    from backend.wise_api import execute_wise_action
+    from backend.database.legacy_sqlite import DB_PATH, get_db_connection
+    from backend.integrations.wise import execute_wise_action
 
     checks: Dict[str, Any] = {}
     engine = get_engine()
@@ -1178,7 +1178,7 @@ def demo_script_check():
 # Visualization Endpoints (Bloomberg-Terminal Style)
 # --------------------------------------------------------------------------- #
 from fastapi.responses import HTMLResponse, Response
-from backend.visualization import get_dashboard_html, get_dashboard_png_bytes
+from backend.services.visualization import get_dashboard_html, get_dashboard_png_bytes
 
 
 @app.get("/viz/health")
@@ -1286,6 +1286,26 @@ _api_audit_logs: List[Dict[str, Any]] = [
 ]
 
 
+def get_latest_fx_rate(currency: str, default_rate: float = 1.0) -> float:
+    """Queries SQLite fx_rates table for the most recent FX exchange rate for the specified currency."""
+    if currency == "USD":
+        return 1.0
+    try:
+        from backend.database.connection import SessionLocal
+        from backend.database.models import FxRate
+        session = SessionLocal()
+        try:
+            pair = f"{currency.upper()}/USD"
+            rec = session.query(FxRate).filter(FxRate.currency_pair == pair).order_by(FxRate.date.desc()).first()
+            if rec and rec.rate > 0:
+                return float(rec.rate)
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Error fetching live FX rate for {currency} from DB: {e}")
+
+    engine = get_engine()
+    return float(engine.fx_rates.get(currency.upper(), default_rate))
 @app.get("/api/forecast")
 def api_get_forecast(
     horizon: int = Query(60, description="Horizon in days (30, 60, 90)"),
@@ -1343,7 +1363,7 @@ def api_get_forecast(
     elif min_worst < danger_inr * 1.25:
         risk_status = "CAUTION"
 
-    return {
+    payload = {
         "horizon_days": horizon,
         "base_currency": "INR",
         "starting_balance": round(engine.starting_balance * inr_rate, 2),
@@ -1358,12 +1378,129 @@ def api_get_forecast(
         "timeline": timeline,
     }
 
+    # Persist simulation run and AI explanation as a safe non-blocking side-effect
+    try:
+        _persist_simulation_run_safe(
+            horizon=horizon,
+            input_params={
+                "horizon": horizon,
+                "stress_currency": stress_currency,
+                "stress_pct": stress_pct,
+                "risk_tolerance": risk_tolerance,
+                "base_currency": "INR",
+            },
+            output_data=payload,
+            news_adj=news_adj,
+        )
+    except Exception as e:
+        logger.warning("Failed to persist simulation run: %s", e)
+
+    return payload
+
+
+def _persist_simulation_run_safe(
+    horizon: int,
+    input_params: dict,
+    output_data: dict,
+    news_adj: Optional[dict] = None,
+) -> Optional[int]:
+    try:
+        from backend.database.connection import SessionLocal
+        from backend.database.models import SimulationRun, AiExplanation
+        session = SessionLocal()
+        try:
+            run_entry = SimulationRun(
+                run_timestamp=datetime.utcnow(),
+                currency_pair=input_params.get("stress_currency") or "PORTFOLIO",
+                horizon_days=horizon,
+                input_params_json=json.dumps(input_params),
+                output_json=json.dumps({
+                    "summary": output_data.get("summary", {}),
+                    "starting_balance": output_data.get("starting_balance"),
+                    "danger_threshold": output_data.get("danger_threshold"),
+                    "timeline_length": len(output_data.get("timeline", [])),
+                }),
+            )
+            session.add(run_entry)
+            session.flush()
+
+            explanation_parts = [
+                f"Simulated {horizon}-day Monte Carlo cash flow projection for {input_params.get('stress_currency') or 'PORTFOLIO'} scenario with risk status {output_data.get('summary', {}).get('risk_status', 'SAFE')} (95% VaR: ₹{output_data.get('summary', {}).get('value_at_risk_95', 0.0):,.2f})."
+            ]
+            risk_flags = []
+
+            if output_data.get("summary", {}).get("risk_status") == "BREACH":
+                risk_flags.append("DANGER_THRESHOLD_BREACH")
+
+            if news_adj and isinstance(news_adj, dict):
+                currencies_dict = news_adj.get("currencies", {})
+                elevated = [
+                    ccy for ccy, cinfo in currencies_dict.items()
+                    if isinstance(cinfo, dict) and cinfo.get("effective", {}).get("volatility_multiplier", 1.0) > 1.1
+                ]
+                if elevated:
+                    explanation_parts.append(
+                        f"Elevated macro FX volatility detected from live Qwen sentiment for {', '.join(elevated)}."
+                    )
+                    risk_flags.append("ELEVATED_MACRO_VOLATILITY")
+
+            explanation_text = " ".join(explanation_parts)
+            logger.info("Qwen simulation explanation params: horizon=%d, ccy=%s | Generated: %s",
+                        horizon, input_params.get("stress_currency") or "PORTFOLIO", explanation_text)
+
+            ai_exp = AiExplanation(
+                simulation_run_id=run_entry.id,
+                explanation_text=explanation_text,
+                risk_flags_json=json.dumps(risk_flags),
+                model_used="qwen2.5:7b-instruct",
+                generated_at=datetime.utcnow(),
+            )
+            session.add(ai_exp)
+            session.commit()
+            return run_entry.id
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Non-fatal error persisting simulation run to DB: {e}")
+        return None
+
+
+@app.get("/api/simulations/history")
+def api_get_simulation_history(limit: int = Query(20, description="Max history records to return")):
+    """Returns recent simulation runs joined with their AI macro explanations."""
+    try:
+        from backend.database.connection import SessionLocal
+        from backend.database.models import SimulationRun, AiExplanation
+        session = SessionLocal()
+        try:
+            runs = session.query(SimulationRun).order_by(SimulationRun.run_timestamp.desc()).limit(limit).all()
+            result = []
+            for r in runs:
+                exps = session.query(AiExplanation).filter(AiExplanation.simulation_run_id == r.id).all()
+                out_parsed = json.loads(r.output_json) if r.output_json else {}
+                inp_parsed = json.loads(r.input_params_json) if r.input_params_json else {}
+                result.append({
+                    "id": r.id,
+                    "run_timestamp": r.run_timestamp.isoformat() + "Z" if r.run_timestamp else None,
+                    "currency_pair": r.currency_pair,
+                    "horizon_days": r.horizon_days,
+                    "input_params": inp_parsed,
+                    "summary": out_parsed.get("summary", {}),
+                    "explanations": [e.to_dict() for e in exps],
+                })
+            return {"count": len(result), "history": result}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Error fetching simulation history from DB: {e}")
+        return {"count": 0, "history": [], "error": str(e)}
+
 
 @app.get("/api/transactions")
 def api_get_transactions():
     engine = get_engine()
-    inr_rate = engine.fx_rates.get("INR", 95.39)
-    from backend.state_machine import get_all_recommendations
+    inr_rate = get_latest_fx_rate("INR", 95.39)
+    from backend.services.state_machine import get_all_recommendations
     recs = get_all_recommendations()
     recs_by_tx = {r["transaction_id"]: r for r in recs}
 
@@ -1542,7 +1679,7 @@ def api_get_market_sentiment():
 @app.post("/api/wise/quote")
 def api_post_wise_quote(req: ApiWiseQuoteRequest):
     import random
-    from backend.wise_api import wise_client
+    from backend.integrations.wise import wise_client
 
     engine = get_engine()
     inr_rate = engine.fx_rates.get("INR", 95.39)
@@ -1588,7 +1725,7 @@ def api_post_wise_quote(req: ApiWiseQuoteRequest):
 def api_post_wise_execute(req: ApiWiseExecuteRequest):
     import random
     from datetime import datetime
-    from backend.wise_api import execute_wise_action
+    from backend.integrations.wise import execute_wise_action
 
     engine = get_engine()
     inr_rate = engine.fx_rates.get("INR", 95.39)
@@ -1618,7 +1755,7 @@ def api_post_wise_execute(req: ApiWiseExecuteRequest):
 
     # Sync to SQLite state machine
     try:
-        from backend.state_machine import sync_action_for_transaction
+        from backend.services.state_machine import sync_action_for_transaction
         sync_action_for_transaction(req.transaction_id, action_type_mapped)
     except Exception as e:
         logger.warning(f"Could not sync wise action to state machine: {e}")
@@ -1680,7 +1817,7 @@ def api_get_audit_log():
 @app.get("/api/economic-impact")
 def api_get_economic_impact():
     """Calculates economic value preservation and avoided cost of inaction."""
-    from backend.economic_impact_engine import EconomicImpactEngine
+    from backend.engines.economic_impact import EconomicImpactEngine
     engine = get_engine()
     impact_eng = EconomicImpactEngine()
     
@@ -1717,13 +1854,13 @@ def api_get_economic_impact():
 
 @app.get("/api/actions", response_model=List[RecommendationLifecycleSchema])
 def api_list_actions():
-    from backend.state_machine import get_all_recommendations
+    from backend.services.state_machine import get_all_recommendations
     return get_all_recommendations()
 
 
 @app.post("/api/actions/{action_id}/approve", response_model=RecommendationLifecycleSchema)
 def api_approve_action(action_id: str):
-    from backend.state_machine import transition_recommendation_status, LifecycleError
+    from backend.services.state_machine import transition_recommendation_status, LifecycleError
     try:
         updated = transition_recommendation_status(action_id, "APPROVED", actor="cfo")
         return updated
@@ -1735,7 +1872,7 @@ def api_approve_action(action_id: str):
 
 @app.post("/api/actions/{action_id}/reject", response_model=RecommendationLifecycleSchema)
 def api_reject_action(action_id: str):
-    from backend.state_machine import transition_recommendation_status, LifecycleError
+    from backend.services.state_machine import transition_recommendation_status, LifecycleError
     try:
         updated = transition_recommendation_status(action_id, "REJECTED", actor="cfo")
         return updated
@@ -1747,7 +1884,7 @@ def api_reject_action(action_id: str):
 
 @app.post("/api/actions/{action_id}/execute", response_model=RecommendationLifecycleSchema)
 def api_execute_action(action_id: str):
-    from backend.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
+    from backend.services.state_machine import get_recommendation_by_id, transition_recommendation_status, LifecycleError
     rec = get_recommendation_by_id(action_id)
     if not rec:
         raise HTTPException(status_code=404, detail=f"No action found with ID '{action_id}'")
