@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-30T08:25:00Z",
+  "generated_at": "2026-08-30T09:34:45Z",
   "currencies": {
     "EUR": {
       "raw": {
@@ -40,22 +40,22 @@
     "USD": {
       "raw": {
         "sentiment_score": -0.2,
-        "volatility_multiplier": 1.1,
-        "drift_bias_bps": -2.5,
+        "volatility_multiplier": 1.2,
+        "drift_bias_bps": -2.0,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.75,
-        "volatility_multiplier": 1.07
+        "drift_bias_bps": -1.4,
+        "volatility_multiplier": 1.14
       },
       "headline_count": 12,
       "headlines": [
         "investingLive Americas FX news wrap 28 Aug",
         "Bessent says disorderly yen moves can destabilize global markets - Reuters",
         "Gen Zers quit their jobs to start a pickle company\u2014now it\u2019s valued at $8.5 million",
+        "Oil settles lower on clues about Fed policy, rumors of Hormuz deal - Reuters",
         "Bessent attacks Warren over yen intervention query, offers \u2018Foreign Exchange for Dummies\u2019 lesson",
         "Fed Chair Kevin Warsh says inflation isn\u2019t slowing, vows to reach 2% target",
-        "Oil settles lower on clues about Fed policy, rumors of Hormuz deal - Reuters",
         "Raghuram Rajan urges Fed to raise rates, says rupee is not in panic zone",
         "Nepal flash floods: Reconstruction costs could run into billions, says finance minister",
         "US-hosted G20 finance meeting to target growth, imbalances, Iran sanctions, Treasury official says - Reuters",
@@ -76,7 +76,7 @@
         "drift_bias_bps": -1.4,
         "volatility_multiplier": 1.07
       },
-      "headline_count": 8,
+      "headline_count": 7,
       "headlines": [
         "Indian bank stocks see sharp NSE-BSE closing price gaps under new auction system",
         "India\u2019s new stock closing auction: How it works and why it is struggling",
@@ -84,8 +84,7 @@
         "Bosnian Serb general Ratko Mladic, convicted of genocide, has died, Serbian TV reports - Reuters",
         "Tata Power loses $490 million arbitration challenge in Singapore",
         "Nepal flash flood death toll rises to 157; Bihar, UP on high alert",
-        "RBI ramps up rupee support as rise in forex reserves gives comfort",
-        "Options turnover on NSE plunges to lowest this year"
+        "RBI ramps up rupee support as rise in forex reserves gives comfort"
       ],
       "source": "live"
     },

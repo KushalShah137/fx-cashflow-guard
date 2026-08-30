@@ -176,7 +176,7 @@ export function App() {
           <div className="nav-center">
             <button
               onClick={() => setCurrentPage("landing")}
-              className={`nav-tab ${currentPage === "landing" ? "active" : ""}`}
+              className="nav-tab"
             >
               Login (/)
             </button>
