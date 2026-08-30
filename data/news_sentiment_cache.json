@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-30T19:03:12Z",
+  "generated_at": "2026-08-30T20:00:26Z",
   "currencies": {
     "EUR": {
       "raw": {
@@ -23,11 +23,11 @@
       "raw": {
         "sentiment_score": 0.3,
         "volatility_multiplier": 0.8,
-        "drift_bias_bps": 1.5,
+        "drift_bias_bps": 2.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": 1.05,
+        "drift_bias_bps": 1.75,
         "volatility_multiplier": 0.86
       },
       "headline_count": 2,
@@ -72,13 +72,13 @@
     "INR": {
       "raw": {
         "sentiment_score": -0.2,
-        "volatility_multiplier": 1.05,
+        "volatility_multiplier": 1.1,
         "drift_bias_bps": -2.0,
         "confidence": 0.7
       },
       "effective": {
         "drift_bias_bps": -1.4,
-        "volatility_multiplier": 1.035
+        "volatility_multiplier": 1.07
       },
       "headline_count": 4,
       "headlines": [
@@ -111,11 +111,11 @@
       "raw": {
         "sentiment_score": -0.3,
         "volatility_multiplier": 1.2,
-        "drift_bias_bps": -2.0,
+        "drift_bias_bps": -2.5,
         "confidence": 0.7
       },
       "effective": {
-        "drift_bias_bps": -1.4,
+        "drift_bias_bps": -1.75,
         "volatility_multiplier": 1.14
       },
       "headline_count": 3,
@@ -128,19 +128,20 @@
     },
     "AUD": {
       "raw": {
-        "sentiment_score": -0.1,
+        "sentiment_score": -0.15,
         "volatility_multiplier": 1.05,
-        "drift_bias_bps": -2.0,
-        "confidence": 0.7
+        "drift_bias_bps": -1.5,
+        "confidence": 0.75
       },
       "effective": {
-        "drift_bias_bps": -1.4,
-        "volatility_multiplier": 1.035
+        "drift_bias_bps": -1.125,
+        "volatility_multiplier": 1.0375
       },
-      "headline_count": 3,
+      "headline_count": 4,
       "headlines": [
         "Turkey, Saudi Arabia, Pakistan to hold first defence pact meeting, source says - Reuters",
         "OpenAI hires Meta executive to lead Southeast Asia, Australia",
+        "Virgin Australia to trim domestic capacity in line with Qantas, expects revenue gains - Reuters",
         "Greek-operated air defence system shoots down drones over Saudi - Reuters"
       ],
       "source": "live"
