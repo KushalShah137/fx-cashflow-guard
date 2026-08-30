@@ -17,10 +17,17 @@ currency per 1 unit of base currency).
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add project root to sys.path so modules resolve cleanly both as a script and via uvicorn
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import json
 import logging
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 
@@ -37,8 +44,80 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "fx_historical_cache.json"
+NEWS_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "news_sentiment_cache.json"
 DEFAULT_START_DATE = date(2026, 9, 1)  # Align with mock transactions date range
 DEFAULT_CURRENCIES: Tuple[str, ...] = ("EUR", "GBP", "INR", "CNY", "JPY", "AUD")
+
+
+def load_news_sentiment_cache(cache_path: Path = NEWS_CACHE_PATH) -> Optional[Dict[str, Any]]:
+    """Loads news sentiment cache if present and valid; returns None on any failure."""
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning("Could not read news sentiment cache (%s). Falling back to baseline.", e)
+        return None
+
+
+def compute_news_parameters(
+    sentiment_data: Optional[Dict[str, Any]],
+    currencies_modeled: List[str],
+    days: int,
+    default_decay_days: int = 5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Translates news sentiment data into time-varying drift (mu) and volatility multiplier (alpha)
+    matrices of shape (days, len(currencies_modeled)).
+
+    When sentiment_data is None or empty:
+      - mu_matrix is all zeros (zero drift)
+      - alpha_matrix is all ones (1.0x baseline volatility)
+    """
+    n_ccy = len(currencies_modeled)
+    mu_matrix = np.zeros((days, n_ccy), dtype=np.float64)
+    alpha_matrix = np.ones((days, n_ccy), dtype=np.float64)
+
+    if not sentiment_data:
+        return mu_matrix, alpha_matrix
+
+    ccy_dict = sentiment_data.get("currencies", sentiment_data)
+
+    for idx, ccy in enumerate(currencies_modeled):
+        if ccy not in ccy_dict:
+            continue
+
+        info = ccy_dict[ccy]
+        effective = info.get("effective", {})
+        raw = info.get("raw", {})
+
+        # Drift in basis points (1 bp = 0.0001) -> converted to daily return drift
+        drift_bps = effective.get(
+            "drift_bias_bps",
+            raw.get("drift_bias_bps", info.get("drift_bias_bps", 0.0)),
+        )
+        daily_drift = float(drift_bps) / 10000.0
+
+        # Volatility multiplier (1.0 = baseline historical vol)
+        vol_mult = effective.get(
+            "volatility_multiplier",
+            raw.get("volatility_multiplier", info.get("volatility_multiplier", 1.0)),
+        )
+        vol_mult = float(vol_mult)
+
+        decay_days = max(1, int(info.get("decay_days", default_decay_days)))
+
+        for t in range(days):
+            if t < decay_days:
+                decay_factor = 1.0 - (t / decay_days)
+                mu_matrix[t, idx] = daily_drift * decay_factor
+                alpha_matrix[t, idx] = 1.0 + (vol_mult - 1.0) * decay_factor
+            else:
+                mu_matrix[t, idx] = 0.0
+                alpha_matrix[t, idx] = 1.0
+
+    return mu_matrix, alpha_matrix
 
 
 # --------------------------------------------------------------------------- #
@@ -199,11 +278,14 @@ def run_monte_carlo_forecast_v2(
     n_simulations: int = 2000,
     base_date: Optional[date] = None,
     seed: Optional[int] = 42,
-    cache_path: Path = CACHE_PATH
+    cache_path: Path = CACHE_PATH,
+    news_adjustments: Optional[Dict[str, Any]] = None,
+    news_sentiment: Optional[Dict[str, Any]] = None,
+    news_cache_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Runs correlated Monte Carlo simulation using Cholesky-decomposed historical return cov.
-    Aligns with existing CashFlowEngine interfaces.
+    Aligns with existing CashFlowEngine interfaces, with optional macro news sentiment injection.
     """
     if days < 1:
         raise ValueError(f"forecast horizon must be >= 1 day, got {days}")
@@ -258,7 +340,39 @@ def run_monte_carlo_forecast_v2(
     # Resulting shocks shape: (n_simulations, days, n_currencies)
     shocks = Z @ L.T
 
-    # 3. Ensure rate on day 0 is spot rate (no shock yet)
+    # 3. Inject news sentiment drift (mu) & volatility scaling (alpha)
+    if news_adjustments is None and news_sentiment is not None:
+        news_adjustments = news_sentiment
+    elif news_adjustments is None and news_cache_path is not None:
+        news_adjustments = load_news_sentiment_cache(news_cache_path)
+
+    drift_vec = np.zeros(len(currencies_modeled), dtype=np.float64)
+    vol_mult_vec = np.ones(len(currencies_modeled), dtype=np.float64)
+
+    if news_adjustments:
+        ccy_dict = news_adjustments.get("currencies", news_adjustments)
+        for idx, ccy in enumerate(currencies_modeled):
+            if ccy in ccy_dict:
+                info = ccy_dict[ccy]
+                effective = info.get("effective", info.get("raw", info)) if isinstance(info, dict) else {}
+                raw_vol = effective.get("volatility_multiplier", 1.0)
+                try:
+                    vol_mult = float(raw_vol)
+                except (ValueError, TypeError):
+                    vol_mult = 1.0
+                vol_mult_clipped = float(np.clip(vol_mult, 0.5, 2.5))
+                vol_mult_vec[idx] = vol_mult_clipped
+
+                raw_drift = effective.get("drift_bias_bps", 0.0)
+                try:
+                    drift_bps = float(raw_drift)
+                except (ValueError, TypeError):
+                    drift_bps = 0.0
+                drift_vec[idx] = drift_bps / 10000.0
+
+    shocks = (shocks * vol_mult_vec) + drift_vec
+
+    # 4. Ensure rate on day 0 is spot rate (no shock yet)
     shocks[:, 0, :] = 0.0
 
     # Cumulate simulated log returns over the horizon to get rate paths
@@ -371,7 +485,10 @@ def get_risk_band(
     days: int = 90,
     n_simulations: int = 2000,
     seed: Optional[int] = 42,
-    cache_path: Path = CACHE_PATH
+    cache_path: Path = CACHE_PATH,
+    news_adjustments: Optional[Dict[str, Any]] = None,
+    news_sentiment: Optional[Dict[str, Any]] = None,
+    news_cache_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """
     Primary API function returning the risk band in a Recharts-friendly contract:
@@ -382,7 +499,9 @@ def get_risk_band(
         days=days,
         n_simulations=n_simulations,
         seed=seed,
-        cache_path=cache_path
+        cache_path=cache_path,
+        news_adjustments=news_adjustments or news_sentiment,
+        news_cache_path=news_cache_path,
     )
     risk_band = []
     for p in res["forecast"]:
@@ -399,9 +518,10 @@ def get_risk_band(
 def get_model_diagnostics(
     cache_path: Path = CACHE_PATH,
     currencies: Optional[Tuple[str, ...]] = None,
+    news_cache_path: Optional[Path] = NEWS_CACHE_PATH,
 ) -> Dict[str, Any]:
     """
-    Diagnostic dashboard endpoint returning matrix calculations for hackathon judges.
+    Diagnostic dashboard endpoint returning matrix calculations and active news adjustments.
     """
     if currencies is None:
         currencies = DEFAULT_CURRENCIES
@@ -409,6 +529,44 @@ def get_model_diagnostics(
         return_matrix, ccy_list = load_aligned_returns(cache_path, currencies)
         cov_matrix, corr_matrix = calculate_historical_covariance_and_correlation(return_matrix, ccy_list)
         L = stabilized_cholesky(cov_matrix)
+
+        # Load active news sentiment adjustments if available
+        news_cache = load_news_sentiment_cache(news_cache_path) if news_cache_path else None
+        active_news_adj: Dict[str, Any] = {}
+        if news_cache:
+            ccy_dict = news_cache.get("currencies", news_cache)
+            for ccy in ccy_list:
+                if ccy in ccy_dict:
+                    info = ccy_dict[ccy]
+                    eff = info.get("effective", {})
+                    raw = info.get("raw", {})
+                    active_news_adj[ccy] = {
+                        "source": info.get("source", "fallback"),
+                        "headline_count": info.get("headline_count", 0),
+                        "sentiment_score": raw.get("sentiment_score", 0.0),
+                        "volatility_multiplier_effective": eff.get("volatility_multiplier", 1.0),
+                        "drift_bias_bps_effective": eff.get("drift_bias_bps", 0.0),
+                        "confidence": raw.get("confidence", 0.0),
+                    }
+                else:
+                    active_news_adj[ccy] = {
+                        "source": "fallback",
+                        "headline_count": 0,
+                        "sentiment_score": 0.0,
+                        "volatility_multiplier_effective": 1.0,
+                        "drift_bias_bps_effective": 0.0,
+                        "confidence": 0.0,
+                    }
+        else:
+            for ccy in ccy_list:
+                active_news_adj[ccy] = {
+                    "source": "none",
+                    "headline_count": 0,
+                    "sentiment_score": 0.0,
+                    "volatility_multiplier_effective": 1.0,
+                    "drift_bias_bps_effective": 0.0,
+                    "confidence": 0.0,
+                }
 
         return {
             "model_version": "v2",
@@ -418,7 +576,10 @@ def get_model_diagnostics(
             "correlation_matrix": corr_matrix.tolist(),
             "covariance_matrix": cov_matrix.tolist(),
             "cholesky_matrix": L.tolist(),
-            "numerical_stabilization_epsilon": 1e-9
+            "numerical_stabilization_epsilon": 1e-9,
+            "news_adjustments_active": bool(news_cache is not None),
+            "news_adjustments_generated_at": news_cache.get("generated_at") if news_cache else None,
+            "news_adjustments": active_news_adj,
         }
     except Exception as e:
         logger.error("Failed to compute diagnostics: %s", e)
